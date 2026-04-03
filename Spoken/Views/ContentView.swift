@@ -8,15 +8,17 @@ enum SpokenMode: String, CaseIterable {
 struct ContentView: View {
     @State private var mode: SpokenMode = .text
     @State private var isRecording = false
+    @State private var isProcessing = false
     @State private var lastResult = ""
     @State private var statusMessage = "点击开始说话"
+    @State private var hasPermission = false
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             // Header
             HStack {
-                Image(systemName: "mic.fill")
-                    .foregroundColor(isRecording ? .red : .blue)
+                Image(systemName: statusIcon)
+                    .foregroundColor(statusColor)
                     .font(.title2)
 
                 Text("Spoken")
@@ -41,22 +43,30 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
+            .disabled(isRecording || isProcessing)
 
-            // Record Button
+            // Main Button
             Button(action: toggleRecording) {
                 HStack {
-                    Image(systemName: isRecording ? "stop.fill" : "mic.fill")
-                    Text(isRecording ? "停止" : "开始说话")
+                    if isProcessing {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Image(systemName: buttonIcon)
+                    }
+                    Text(buttonTitle)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .background(isRecording ? Color.red : Color.blue)
+                .background(buttonColor)
                 .foregroundColor(.white)
                 .cornerRadius(8)
             }
+            .disabled(isProcessing)
             .padding(.horizontal, 16)
 
-            // Status / Result
+            // Result / Status
             if !lastResult.isEmpty {
                 Text(lastResult)
                     .font(.caption)
@@ -68,11 +78,45 @@ struct ContentView: View {
             Text(statusMessage)
                 .font(.caption)
                 .foregroundColor(.secondary)
-
-            Spacer()
+                .padding(.bottom, 8)
         }
-        .frame(width: 300, height: 200)
+        .frame(width: 300, height: 180)
+        .onAppear(perform: checkPermissions)
     }
+
+    // MARK: - Computed Properties
+
+    private var buttonIcon: String {
+        if isRecording { return "stop.fill" }
+        if isProcessing { return "arrow.triangle.2.circlepath" }
+        return "mic.fill"
+    }
+
+    private var buttonTitle: String {
+        if isRecording { return "停止" }
+        if isProcessing { return "优化中..." }
+        return "开始说话"
+    }
+
+    private var buttonColor: Color {
+        if isRecording { return .red }
+        if isProcessing { return .orange }
+        return .blue
+    }
+
+    private var statusIcon: String {
+        if isRecording { return "mic.fill" }
+        if isProcessing { return "arrow.triangle.2.circlepath" }
+        return "mic"
+    }
+
+    private var statusColor: Color {
+        if isRecording { return .red }
+        if isProcessing { return .orange }
+        return .blue
+    }
+
+    // MARK: - Actions
 
     private func toggleRecording() {
         if isRecording {
@@ -82,15 +126,30 @@ struct ContentView: View {
         }
     }
 
+    private func checkPermissions() {
+        SpeechService.shared.requestPermissions { micGranted, speechGranted in
+            DispatchQueue.main.async {
+                if micGranted && speechGranted {
+                    hasPermission = true
+                    statusMessage = "就绪，点击开始说话"
+                } else {
+                    hasPermission = false
+                    statusMessage = "请授权麦克风和语音识别权限"
+                }
+            }
+        }
+    }
+
     private func startRecording() {
         isRecording = true
         statusMessage = "正在说话..."
-        SpeechService.shared.startRecording { transcript in
+        lastResult = ""
+
+        SpeechService.shared.startRecording { [self] transcript in
             DispatchQueue.main.async {
                 self.isRecording = false
                 self.lastResult = transcript
-                self.statusMessage = "处理中..."
-                self.processText(transcript)
+                self.optimizeAndInput(transcript)
             }
         }
     }
@@ -101,11 +160,35 @@ struct ContentView: View {
         statusMessage = "正在识别..."
     }
 
-    private func processText(_ text: String) {
-        // TODO: v0.2 MiniMax 优化
-        // 目前 v0.1 直接输入原文本
-        KeyboardService.shared.typeText(text)
-        statusMessage = "已输入"
-        lastResult = ""
+    private func optimizeAndInput(_ transcript: String) {
+        guard !transcript.isEmpty else {
+            statusMessage = "未识别到内容"
+            return
+        }
+
+        isProcessing = true
+        statusMessage = "AI 优化中..."
+
+        MiniMaxService.shared.optimize(text: transcript, mode: mode) { result in
+            DispatchQueue.main.async {
+                self.isProcessing = false
+
+                switch result {
+                case .success(let optimizedText):
+                    self.lastResult = optimizedText
+                    self.statusMessage = "已输入"
+                    // 延迟一下让用户看到结果再输入
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        KeyboardService.shared.typeText(optimizedText)
+                    }
+                case .failure(let error):
+                    self.statusMessage = "优化失败: \(error.localizedDescription)"
+                    // 降级：直接输入原文本
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        KeyboardService.shared.typeText(transcript)
+                    }
+                }
+            }
+        }
     }
 }
