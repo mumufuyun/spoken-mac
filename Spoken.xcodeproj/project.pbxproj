@@ -12,6 +12,7 @@
 		39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB2856E4008DD751136C6955 /* KeyboardService.swift */; };
 		3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */; };
 		60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876CF505EC5F976A23DF7E41 /* HotKeyService.swift */; };
+		6961E4E359D5B549762C359E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C7B49D7F245B7BFE04FD46 /* NotificationService.swift */; };
 		863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D34239B1DE4FD221AA22A2D /* main.swift */; };
 		8C1F59F1AA0131173FEAB075 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C35543EA1D8AA432D86247B2 /* Assets.xcassets */; };
 		C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */; };
@@ -27,6 +28,7 @@
 		876CF505EC5F976A23DF7E41 /* HotKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyService.swift; sourceTree = "<group>"; };
 		BB2856E4008DD751136C6955 /* KeyboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardService.swift; sourceTree = "<group>"; };
 		C35543EA1D8AA432D86247B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E3C7B49D7F245B7BFE04FD46 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
 		F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMaxService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -38,6 +40,7 @@
 				876CF505EC5F976A23DF7E41 /* HotKeyService.swift */,
 				BB2856E4008DD751136C6955 /* KeyboardService.swift */,
 				F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */,
+				E3C7B49D7F245B7BFE04FD46 /* NotificationService.swift */,
 				EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */,
 			);
 			path = Services;
@@ -173,6 +176,7 @@
 				60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */,
 				39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */,
 				C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */,
+				6961E4E359D5B549762C359E /* NotificationService.swift in Sources */,
 				3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */,
 				863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */,
 			);
