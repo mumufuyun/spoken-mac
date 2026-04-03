@@ -25,7 +25,7 @@ class MiniMaxService {
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         let prompt: String
-        let model = "abab6.5s"
+        let model = "abab6.5s-chat"  // 快模型
 
         switch mode {
         case .text:
