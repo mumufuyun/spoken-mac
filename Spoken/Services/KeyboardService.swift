@@ -24,26 +24,20 @@ class KeyboardService {
                 if needsShift {
                     keyDown?.flags = .maskShift
                     keyUp?.flags = .maskShift
-                } else {
-                    keyDown?.flags = []
-                    keyUp?.flags = []
                 }
 
                 keyDown?.post(tap: .cghidEventTap)
                 keyUp?.post(tap: .cghidEventTap)
             } else {
-                // 非 ASCII 字符（如中文）：通过 Unicode 输入
-                var unicode = UniChar(scalar.value)
-                let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-                keyDown?.flags = .maskUnicode
-                keyDown?.unicodeString[0] = unicode
-                keyDown?.unicodeStringLength = 1
-                keyDown?.post(tap: .cghidEventTap)
+                // 非 ASCII 字符（中文等）：通过 CGEventKeyboardSetUnicodeString 输入
+                var uniChar = UniChar(scalar.value)
+                var keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
+                var keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
 
-                let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-                keyUp?.flags = .maskUnicode
-                keyUp?.unicodeString[0] = unicode
-                keyUp?.unicodeStringLength = 1
+                keyDown?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &uniChar)
+                keyUp?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &uniChar)
+
+                keyDown?.post(tap: .cghidEventTap)
                 keyUp?.post(tap: .cghidEventTap)
             }
 
@@ -55,9 +49,9 @@ class KeyboardService {
     /// 将字符映射为 Mac 虚拟键码 + 是否需要 Shift
     /// 返回 (keyCode, needsShift)。keyCode 为 nil 时用 Unicode 方式输入
     private func charToKeyCodeAndShift(_ char: Character) -> (CGKeyCode?, Bool) {
-        // 映射表：(keyCode, 需要Shift)
+        // 映射表：(字符, keyCode, 基础是否需要Shift)
         let map: [(Character, CGKeyCode, Bool)] = [
-            // 字母（统一用小写，Shift 由调用方处理）
+            // 字母（统一用小写，Shift 由大小写决定）
             ("a", 0x00, false), ("b", 0x0B, false), ("c", 0x08, false), ("d", 0x02, false),
             ("e", 0x0E, false), ("f", 0x03, false), ("g", 0x05, false), ("h", 0x04, false),
             ("i", 0x22, false), ("j", 0x26, false), ("k", 0x28, false), ("l", 0x25, false),
@@ -89,11 +83,11 @@ class KeyboardService {
         let lower = String(char).lowercased().first ?? char
         if let entry = map.first(where: { $0.0 == lower }) {
             // 原始字符是大写或符号，需要 Shift
-            let needsShift = char != lower
-            return (entry.1, needsShift || entry.2)
+            let needsShift = char != lower || entry.2
+            return (entry.1, needsShift)
         }
 
-        // 中文字符或其他非 ASCII 字符
+        // 中文字符或其他非 ASCII 字符 → 用 Unicode 输入
         if char.unicodeScalars.first.map({ $0.value > 127 }) == true {
             return (nil, false)
         }

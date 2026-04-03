@@ -13,7 +13,7 @@ class HotKeyService {
     // 回调：当快捷键被触发时
     var onTriggered: (() -> Void)?
 
-    private init() {}
+    init() {}
 
     // MARK: - 注册快捷键 (⌥ + V)
 
