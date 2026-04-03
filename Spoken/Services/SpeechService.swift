@@ -11,6 +11,7 @@ class SpeechService: ObservableObject {
     private var isRecording = false
     private var silenceTimer: Timer?
     private var lastAudioTime: Date?
+    private var lastPartialText: String = ""
     private let silenceThreshold: TimeInterval = 2.0  // 静默2秒认为说完
 
     private init() {}
@@ -42,11 +43,16 @@ class SpeechService: ObservableObject {
         }
     }
 
-    // MARK: - 录音
+    // MARK: - 录音（流式）
 
-    func startRecording(onResult: @escaping (String) -> Void) {
+    /// 开始录音，实时回调（流式）
+    /// - Parameters:
+    ///   - onPartial: 实时返回部分识别结果
+    ///   - onFinal: 最终完整识别结果
+    func startRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
         guard !isRecording else { return }
         isRecording = true
+        lastPartialText = ""
         print("Spoken: [DEBUG] startRecording called")
 
         // 重置状态
@@ -59,7 +65,6 @@ class SpeechService: ObservableObject {
             isRecording = false
             return
         }
-        print("Spoken: [DEBUG] audioEngine and recognitionRequest created")
 
         recognitionRequest.shouldReportPartialResults = true
 
@@ -85,33 +90,40 @@ class SpeechService: ObservableObject {
         // 启动静默检测计时器
         lastAudioTime = Date()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.checkSilence(onResult: onResult)
+            self?.checkSilence(onFinal: onFinal)
         }
 
         // 语音识别
         let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
         recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            if let error = error {
-                print("Spoken: [ERROR] recognitionTask error: \(error)")
-                self?.stopRecording()
-                return
-            }
+            guard let self = self else { return }
 
             if let result = result {
-                print("Spoken: [DEBUG] partial result: \(result.bestTranscription.formattedString)")
+                let text = result.bestTranscription.formattedString
+                self.lastPartialText = text  // 保存最新部分结果
+
+                print("Spoken: [DEBUG] partial: \(text)")
+                DispatchQueue.main.async {
+                    onPartial(text)
+                }
+
                 if result.isFinal {
-                    self?.stopRecording()
-                    let transcript = result.bestTranscription.formattedString
-                    print("Spoken: [DEBUG] final transcript: \(transcript)")
+                    self.stopRecording()
+                    print("Spoken: [DEBUG] final transcript: \(text)")
                     DispatchQueue.main.async {
-                        onResult(transcript)
+                        onFinal(text)
                     }
                 }
+            }
+
+            if error != nil {
+                // 静默或用户主动停止
+                print("Spoken: [DEBUG] recognitionTask ended (error or stopped)")
             }
         }
     }
 
-    private func checkSilence(onResult: @escaping (String) -> Void) {
+    private func checkSilence(onFinal: @escaping (String) -> Void) {
         guard isRecording,
               let lastTime = lastAudioTime else { return }
 
@@ -121,8 +133,14 @@ class SpeechService: ObservableObject {
             silenceTimer?.invalidate()
             silenceTimer = nil
 
-            // 手动结束音频，让识别器输出最终结果
-            recognitionRequest?.endAudio()
+            // 用最后识别到的部分文本作为结果
+            let finalText = lastPartialText
+            stopRecording()
+
+            print("Spoken: [DEBUG] silence final text: \(finalText)")
+            DispatchQueue.main.async {
+                onFinal(finalText)
+            }
         }
     }
 

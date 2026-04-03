@@ -46,7 +46,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Global HotKey (⌥ + V)
+    // MARK: - Global HotKey
 
     private func setupHotKey() {
         hotKeyService = HotKeyService()
@@ -59,21 +59,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleHotKey() {
-        // 如果面板显示了，就关闭
         if popover.isShown {
             popover.performClose(nil)
             return
         }
-        // 如果录音窗口显示了，就关闭
         if recordingPanel?.isVisible == true {
             closeRecordingPanel()
             return
         }
-        // 否则打开录音浮动窗口
         showRecordingPanel()
     }
 
-    // MARK: - Recording Panel (⌥V 浮动窗口)
+    // MARK: - Recording Panel
 
     private func showRecordingPanel() {
         let viewModel = RecordingViewModel()
@@ -93,7 +90,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentViewController = hostingController
 
-        // 定位到屏幕右下角
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
             let panelSize = panel.frame.size
@@ -156,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 class RecordingViewModel: ObservableObject {
     @Published var isRecording = false
-    @Published var transcript = ""
+    @Published var partialText = ""
     @Published var statusText = "点击按钮开始说话"
 
     var onClose: (() -> Void)?
@@ -164,17 +160,24 @@ class RecordingViewModel: ObservableObject {
 
     func startRecording() {
         isRecording = true
-        transcript = ""
+        partialText = ""
         statusText = "正在说话..."
 
-        SpeechService.shared.startRecording { [weak self] text in
-            DispatchQueue.main.async {
-                self?.isRecording = false
-                self?.transcript = text
-                self?.statusText = "处理中..."
-                self?.processAndInput(text)
+        SpeechService.shared.startRecording(
+            onPartial: { [weak self] text in
+                DispatchQueue.main.async {
+                    self?.partialText = text
+                    self?.statusText = text.isEmpty ? "正在说话..." : text
+                }
+            },
+            onFinal: { [weak self] text in
+                DispatchQueue.main.async {
+                    self?.isRecording = false
+                    self?.partialText = ""
+                    self?.processAndInput(text)
+                }
             }
-        }
+        )
     }
 
     func stopRecording() {
@@ -189,7 +192,7 @@ class RecordingViewModel: ObservableObject {
             return
         }
 
-        // 走 MiniMax 优化
+        statusText = "优化中..."
         MiniMaxService.shared.optimize(text: text, mode: .text) { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
@@ -197,7 +200,6 @@ class RecordingViewModel: ObservableObject {
                     self?.statusText = "已完成"
                     self?.onComplete?(optimized)
                 case .failure:
-                    // 降级：直接输入原文本
                     self?.statusText = "已完成"
                     self?.onComplete?(text)
                 }
@@ -212,28 +214,39 @@ struct RecordingPanelView: View {
     @ObservedObject var viewModel: RecordingViewModel
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             // Header
             HStack {
                 Circle()
                     .fill(viewModel.isRecording ? Color.red : Color.blue)
                     .frame(width: 8, height: 8)
+                    .shadow(color: viewModel.isRecording ? .red.opacity(0.5) : .clear, radius: 4)
+
                 Text("Spoken")
                     .font(.headline)
+                    .fontWeight(.semibold)
+
                 Spacer()
+
                 Button(action: { viewModel.onClose?() }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
+                        .font(.system(size: 14))
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 12)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
-            // Status
-            Text(viewModel.statusText)
-                .font(.caption)
-                .foregroundColor(.secondary)
+            // Status / Partial text
+            Text(viewModel.partialText.isEmpty ? viewModel.statusText : viewModel.partialText)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(viewModel.partialText.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
 
             // Record Button
             Button(action: {
@@ -243,30 +256,39 @@ struct RecordingPanelView: View {
                     viewModel.startRecording()
                 }
             }) {
-                HStack {
+                HStack(spacing: 6) {
                     Image(systemName: viewModel.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 13))
                     Text(viewModel.isRecording ? "停止" : "开始说话")
+                        .font(.system(size: 13, weight: .medium))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(viewModel.isRecording ? Color.red : Color.blue)
+                .padding(.vertical, 8)
+                .background(
+                    viewModel.isRecording
+                        ? AnyShapeStyle(Color.red)
+                        : AnyShapeStyle(LinearGradient(
+                            colors: [Color(hex: "#4F7DF3"), Color(hex: "#6B5CE7")],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ))
+                )
                 .foregroundColor(.white)
-                .cornerRadius(6)
+                .cornerRadius(8)
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 16)
-
-            Spacer()
+            .padding(.bottom, 14)
         }
         .frame(width: 280, height: 160)
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                .cornerRadius(12)
+                .cornerRadius(16)
         )
     }
 }
 
-// MARK: - Visual Effect View (SwiftUI wrapper for macOS NSVisualEffectView)
+// MARK: - Visual Effect View
 
 struct VisualEffectView: NSViewRepresentable {
     let material: NSVisualEffectView.Material
@@ -285,3 +307,4 @@ struct VisualEffectView: NSViewRepresentable {
         nsView.blendingMode = blendingMode
     }
 }
+
