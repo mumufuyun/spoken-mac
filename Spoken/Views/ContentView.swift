@@ -177,12 +177,13 @@ struct ContentView: View {
                 case .success(let optimizedText):
                     self.lastResult = optimizedText
                     self.statusMessage = "已输入"
-                    // 延迟一下让用户看到结果再输入
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         KeyboardService.shared.typeText(optimizedText)
+                        NotificationService.shared.notifySuccess(text: optimizedText)
                     }
                 case .failure(let error):
                     self.statusMessage = "优化失败: \(error.localizedDescription)"
+                    NotificationService.shared.notifyFailure(reason: error.localizedDescription)
                     // 降级：直接输入原文本
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         KeyboardService.shared.typeText(transcript)
