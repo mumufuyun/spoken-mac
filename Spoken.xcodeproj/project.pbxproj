@@ -11,7 +11,9 @@
 		17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80D8DB3AB22966206517C70F /* ContentView.swift */; };
 		39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB2856E4008DD751136C6955 /* KeyboardService.swift */; };
 		3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */; };
+		60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876CF505EC5F976A23DF7E41 /* HotKeyService.swift */; };
 		863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D34239B1DE4FD221AA22A2D /* main.swift */; };
+		8C1F59F1AA0131173FEAB075 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C35543EA1D8AA432D86247B2 /* Assets.xcassets */; };
 		C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */; };
 /* End PBXBuildFile section */
 
@@ -22,7 +24,9 @@
 		6D34239B1DE4FD221AA22A2D /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		76F4A99A2E36BB4C4068A3D6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		80D8DB3AB22966206517C70F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		876CF505EC5F976A23DF7E41 /* HotKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyService.swift; sourceTree = "<group>"; };
 		BB2856E4008DD751136C6955 /* KeyboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardService.swift; sourceTree = "<group>"; };
+		C35543EA1D8AA432D86247B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
 		F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMaxService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -31,6 +35,7 @@
 		1B8A6F544698795D23DDDFE2 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				876CF505EC5F976A23DF7E41 /* HotKeyService.swift */,
 				BB2856E4008DD751136C6955 /* KeyboardService.swift */,
 				F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */,
 				EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */,
@@ -74,6 +79,7 @@
 		B243910291B46417F289FFCC /* Spoken */ = {
 			isa = PBXGroup;
 			children = (
+				C35543EA1D8AA432D86247B2 /* Assets.xcassets */,
 				76F4A99A2E36BB4C4068A3D6 /* Info.plist */,
 				671510E42D3AB924CD2B48D4 /* Spoken.entitlements */,
 				59314A0CE2CB24AA8572D534 /* App */,
@@ -99,6 +105,7 @@
 			buildConfigurationList = 02A403ADA7CD8639DBC22E96 /* Build configuration list for PBXNativeTarget "Spoken" */;
 			buildPhases = (
 				1284D92D0C654FD06ECE47B8 /* Sources */,
+				AC40C90ED8AA0992841FF83C /* Resources */,
 			);
 			buildRules = (
 			);
@@ -145,6 +152,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		AC40C90ED8AA0992841FF83C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8C1F59F1AA0131173FEAB075 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		1284D92D0C654FD06ECE47B8 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -152,6 +170,7 @@
 			files = (
 				118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */,
 				17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */,
+				60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */,
 				39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */,
 				C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */,
 				3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */,
