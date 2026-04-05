@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SpokenMode: String, CaseIterable {
-    case text = "文本"
+    case text = "文本优化"
     case prompt = "Prompt"
 }
 
@@ -9,89 +9,51 @@ struct ContentView: View {
     @State private var mode: SpokenMode = .text
     @State private var isRecording = false
     @State private var isProcessing = false
-    @State private var lastResult = ""
     @State private var statusMessage = "就绪"
-    @State private var hasPermission = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: isRecording ? statusColor.opacity(0.5) : .clear, radius: 4)
-
-                Text("Spoken")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-
-                Spacer()
-
-                Text(statusMessage)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 12)
-
-            Divider()
-                .padding(.horizontal, 16)
-
-            // Mode Picker
+            // 模式切换
             HStack(spacing: 8) {
                 ForEach(SpokenMode.allCases, id: \.self) { m in
                     Button(action: { mode = m }) {
                         Text(m.rawValue)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 8)
                             .background(mode == m ? Color(hex: "#4F7DF3") : Color(hex: "#F0F2F5"))
                             .foregroundColor(mode == m ? .white : Color(hex: "#6B7280"))
-                            .cornerRadius(6)
+                            .cornerRadius(8)
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .disabled(isRecording || isProcessing)
+            .padding(.top, 16)
+            .padding(.bottom, 16)
 
-            Spacer()
-
-            // Partial result preview
-            if !lastResult.isEmpty {
-                Text(lastResult)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-            }
-
-            // Main Button
+            // 主按钮
             Button(action: toggleRecording) {
-                HStack(spacing: 8) {
+                VStack(spacing: 8) {
                     if isProcessing {
                         ProgressView()
-                            .scaleEffect(0.7)
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        Text("优化中")
-                            .font(.system(size: 14, weight: .medium))
+                        Text("优化中...")
+                            .font(.system(size: 13, weight: .medium))
                     } else if isRecording {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 13))
-                        Text("停止")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.system(size: 24))
+                        Text("说话中...")
+                            .font(.system(size: 13, weight: .medium))
                     } else {
                         Image(systemName: "mic.fill")
-                            .font(.system(size: 13))
+                            .font(.system(size: 24))
                         Text("开始说话")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 24)
                 .background(
                     isRecording
                         ? AnyShapeStyle(Color.red)
@@ -102,23 +64,24 @@ struct ContentView: View {
                         ))
                 )
                 .foregroundColor(.white)
-                .cornerRadius(10)
+                .cornerRadius(14)
             }
             .buttonStyle(.plain)
             .disabled(isProcessing)
             .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+
+            // 状态提示
+            if !isRecording && !isProcessing {
+                Text(statusMessage)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.top, 10)
+            }
+
+            Spacer().frame(height: 12)
         }
-        .frame(width: 300, height: 200)
+        .frame(width: 240, height: 160)
         .onAppear(perform: checkPermissions)
-    }
-
-    // MARK: - Computed
-
-    private var statusColor: Color {
-        if isRecording { return .red }
-        if isProcessing { return .orange }
-        return Color(hex: "#4F7DF3")
     }
 
     // MARK: - Actions
@@ -134,8 +97,7 @@ struct ContentView: View {
     private func checkPermissions() {
         SpeechService.shared.requestPermissions { micGranted, speechGranted in
             DispatchQueue.main.async {
-                hasPermission = micGranted && speechGranted
-                statusMessage = hasPermission ? "就绪" : "请授权权限"
+                statusMessage = (micGranted && speechGranted) ? "就绪" : "请授权权限"
             }
         }
     }
@@ -143,19 +105,16 @@ struct ContentView: View {
     private func startRecording() {
         isRecording = true
         statusMessage = "正在说话..."
-        lastResult = ""
 
         SpeechService.shared.startRecording(
             onPartial: { [self] text in
                 DispatchQueue.main.async {
-                    self.lastResult = text
                     self.statusMessage = text.isEmpty ? "正在说话..." : text
                 }
             },
             onFinal: { [self] transcript in
                 DispatchQueue.main.async {
                     self.isRecording = false
-                    self.lastResult = ""
                     self.optimizeAndInput(transcript)
                 }
             }
@@ -174,29 +133,9 @@ struct ContentView: View {
             return
         }
 
-        isProcessing = true
-        statusMessage = "优化中..."
-
-        MiniMaxService.shared.optimize(text: transcript, mode: mode) { result in
-            DispatchQueue.main.async {
-                self.isProcessing = false
-
-                switch result {
-                case .success(let optimizedText):
-                    self.statusMessage = "已输入"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        KeyboardService.shared.typeText(optimizedText)
-                        NotificationService.shared.notifySuccess(text: optimizedText)
-                    }
-                case .failure(let error):
-                    self.statusMessage = "优化失败"
-                    NotificationService.shared.notifyFailure(reason: error.localizedDescription)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        KeyboardService.shared.typeText(transcript)
-                    }
-                }
-            }
-        }
+        // TODO: MiniMax 暂时跳过，直接用原始文字
+        isProcessing = false
+        statusMessage = "已输入"
+        KeyboardService.shared.typeText(transcript)
     }
 }
-

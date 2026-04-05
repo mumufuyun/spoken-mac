@@ -15,7 +15,7 @@ class HotKeyService {
 
     init() {}
 
-    // MARK: - 注册快捷键 (⌥ + V)
+    // MARK: - 注册快捷键 (⌘ + ;)
 
     func register() {
         // 事件类型：按下时触发
@@ -38,13 +38,13 @@ class HotKeyService {
                             selfPtr,
                             &eventHandler)
 
-        // 注册快捷键：⌥ + V
-        // V = 0x09, Option = controlKey (bit 10)
-        let modifiers: UInt32 = UInt32(controlKey)  // ⌥ 是 Option 键
-        let keyCode: UInt32 = 0x09  // V 键
+        // 注册快捷键：⌘ + ;
+        // ; = 0x29, Cmd = cmdKey (bit 8)
+        let modifiers: UInt32 = UInt32(cmdKey)
+        let keyCode: UInt32 = 0x29  // ;
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x534D4F53), // "SMOS"
-                                      id: 1) // 'S' 'M' 'O' 'S' = Spoken
+                                      id: 1)
 
         RegisterEventHotKey(keyCode,
                             modifiers,
@@ -52,6 +52,8 @@ class HotKeyService {
                             GetApplicationEventTarget(),
                             0,
                             &hotKeyRef)
+
+        print("Spoken: [DEBUG] HotKeyService registered (⌘;)")
     }
 
     func unregister() {

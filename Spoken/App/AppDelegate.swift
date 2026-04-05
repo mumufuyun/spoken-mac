@@ -20,7 +20,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Spoken")
+            if let image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Spoken") {
+                image.size = NSSize(width: 14, height: 14)
+                image.isTemplate = true
+                button.image = image
+            } else {
+                button.title = "🎤"
+            }
             button.action = #selector(togglePopover)
             button.target = self
         }
@@ -42,7 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
         }
     }
 
@@ -78,24 +83,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(rootView: recordingView)
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 160),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 160),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.level = .floating
+        panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentViewController = hostingController
 
+        // 底部居中
         if let screen = NSScreen.main {
-            let screenFrame = screen.visibleFrame
-            let panelSize = panel.frame.size
+            let visible = screen.visibleFrame
             panel.setFrameOrigin(NSPoint(
-                x: screenFrame.maxX - panelSize.width - 20,
-                y: screenFrame.maxY - panelSize.height - 20
+                x: visible.midX - panel.frame.width / 2,
+                y: visible.origin.y + 40
             ))
         }
 
@@ -105,18 +110,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         viewModel.onComplete = { [weak self] text in
             self?.closeRecordingPanel()
-            KeyboardService.shared.typeText(text)
+            // 等待窗口关闭动画完成后再输入
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                KeyboardService.shared.typeText(text)
+            }
             NotificationService.shared.notifySuccess(text: text)
         }
 
         self.recordingViewModel = viewModel
         self.recordingPanel = panel
-        panel.makeKeyAndOrderFront(nil)
+        panel.orderFront(nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            viewModel.startRecording()
+        }
     }
 
     private func closeRecordingPanel() {
         recordingViewModel.stopRecording()
-        recordingPanel?.close()
+        recordingPanel?.orderOut(nil)
         recordingPanel = nil
     }
 
@@ -153,7 +165,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 class RecordingViewModel: ObservableObject {
     @Published var isRecording = false
     @Published var partialText = ""
-    @Published var statusText = "点击按钮开始说话"
+    @Published var statusText = "正在聆听..."
 
     var onClose: (() -> Void)?
     var onComplete: ((String) -> Void)?
@@ -161,13 +173,17 @@ class RecordingViewModel: ObservableObject {
     func startRecording() {
         isRecording = true
         partialText = ""
-        statusText = "正在说话..."
+        statusText = "正在聆听..."
 
         SpeechService.shared.startRecording(
             onPartial: { [weak self] text in
+                print("Spoken: [DEBUG] onPartial called with: '\(text)'")
                 DispatchQueue.main.async {
                     self?.partialText = text
-                    self?.statusText = text.isEmpty ? "正在说话..." : text
+                    if !text.isEmpty {
+                        self?.statusText = text
+                    }
+                    print("Spoken: [DEBUG] viewModel updated: statusText='\(self?.statusText ?? "?")'")
                 }
             },
             onFinal: { [weak self] text in
@@ -191,20 +207,8 @@ class RecordingViewModel: ObservableObject {
             statusText = "未识别到内容"
             return
         }
-
-        statusText = "优化中..."
-        MiniMaxService.shared.optimize(text: text, mode: .text) { [weak self] result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let optimized):
-                    self?.statusText = "已完成"
-                    self?.onComplete?(optimized)
-                case .failure:
-                    self?.statusText = "已完成"
-                    self?.onComplete?(text)
-                }
-            }
-        }
+        statusText = "已完成"
+        onComplete?(text)
     }
 }
 
@@ -215,76 +219,89 @@ struct RecordingPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Circle()
-                    .fill(viewModel.isRecording ? Color.red : Color.blue)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: viewModel.isRecording ? .red.opacity(0.5) : .clear, radius: 4)
+            Spacer().frame(height: 16)
 
-                Text("Spoken")
-                    .font(.headline)
-                    .fontWeight(.semibold)
+            HStack(spacing: 4) {
+                ForEach(0..<5, id: \.self) { index in
+                    WaveBar(index: index, isRecording: viewModel.isRecording)
+                }
+            }
+            .frame(height: 32)
+            .opacity(viewModel.isRecording ? 1 : 0.5)
+
+            Spacer().frame(height: 12)
+
+            Text(viewModel.statusText)
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .foregroundColor(viewModel.partialText.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+
+            Spacer().frame(height: 16)
+
+            HStack {
+                Text("对着说话，自动输入")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
 
                 Spacer()
 
                 Button(action: { viewModel.onClose?() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                        .font(.system(size: 14))
+                        .font(.system(size: 18))
+                        .foregroundColor(.secondary.opacity(0.6))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-
-            // Status / Partial text
-            Text(viewModel.partialText.isEmpty ? viewModel.statusText : viewModel.partialText)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(viewModel.partialText.isEmpty ? .secondary : .primary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-
-            // Record Button
-            Button(action: {
-                if viewModel.isRecording {
-                    viewModel.stopRecording()
-                } else {
-                    viewModel.startRecording()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: viewModel.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 13))
-                    Text(viewModel.isRecording ? "停止" : "开始说话")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    viewModel.isRecording
-                        ? AnyShapeStyle(Color.red)
-                        : AnyShapeStyle(LinearGradient(
-                            colors: [Color(hex: "#4F7DF3"), Color(hex: "#6B5CE7")],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ))
-                )
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
         }
-        .frame(width: 280, height: 160)
+        .frame(width: 420, height: 160)
         .background(
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                .cornerRadius(16)
+                .cornerRadius(20)
         )
+    }
+}
+
+// MARK: - 波形动画条
+
+struct WaveBar: View {
+    let index: Int
+    let isRecording: Bool
+
+    @State private var animOffset: CGFloat = 0
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(
+                LinearGradient(
+                    colors: [Color(hex: "#4F7DF3"), Color(hex: "#6B5CE7")],
+                    startPoint: .bottom,
+                    endPoint: .top
+                )
+            )
+            .frame(width: 4, height: isRecording ? animOffset : 6)
+            .animation(
+                Animation.easeInOut(duration: 0.5)
+                    .repeatForever(autoreverses: true)
+                    .delay(Double(index) * 0.1),
+                value: animOffset
+            )
+            .onAppear {
+                if isRecording {
+                    animOffset = CGFloat.random(in: 12...28)
+                }
+            }
+            .onChange(of: isRecording) { _, newValue in
+                if newValue {
+                    animOffset = CGFloat.random(in: 12...28)
+                } else {
+                    animOffset = 6
+                }
+            }
     }
 }
 
@@ -307,4 +324,3 @@ struct VisualEffectView: NSViewRepresentable {
         nsView.blendingMode = blendingMode
     }
 }
-
