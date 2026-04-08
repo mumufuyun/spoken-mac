@@ -105,7 +105,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
 
-        usleep(100)
+        usleep(100_000)
 
         let outcome: InjectionOutcome = hasFrontmostApp ? .inserted : .copiedToClipboard
 

@@ -18,6 +18,8 @@ enum TranslateLanguage: String, CaseIterable {
 
 struct ContentView: View {
     @State private var mode: SpokenMode = .direct
+    @State private var micPermissionGranted = false
+    @State private var accessibilityGranted = false
     @State private var translateLang: TranslateLanguage = .english
     @State private var isRecording = false
     @State private var isProcessing = false
@@ -134,7 +136,21 @@ struct ContentView: View {
                 .shadow(color: Color(hex: "#4e3220").opacity(0.04), radius: 4, x: 0, y: 2)
                 .shadow(color: Color(hex: "#000000").opacity(0.02), radius: 1, x: 0, y: 0)
         )
-        .onAppear(perform: checkPermissions)
+        .onAppear(perform: {
+            WhisperService.shared.requestPermissions { micGranted in
+                DispatchQueue.main.async {
+                    self.micPermissionGranted = micGranted
+                    self.accessibilityGranted = AccessibilityService.shared.isAccessibilityEnabled()
+                    if !micGranted {
+                        self.statusMessage = "请授权麦克风权限"
+                    } else if !self.accessibilityGranted {
+                        self.statusMessage = "请授权辅助功能权限"
+                    } else {
+                        self.statusMessage = "就绪"
+                    }
+                }
+            }
+        })
     }
 
     private var statusColor: Color {
@@ -146,6 +162,10 @@ struct ContentView: View {
     }
 
     private func toggleRecording() {
+        guard micPermissionGranted, accessibilityGranted else {
+            statusMessage = "请先授权权限"
+            return
+        }
         if isRecording { stopRecording() } else { startRecording() }
     }
 
@@ -233,7 +253,7 @@ struct ContentView: View {
 
     private func injectText(_ text: String) {
         if let app = frontmostApp {
-            app.activate(options: .activateIgnoringOtherApps)
+            app.activate(options: [])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 let success = KeyboardService.shared.typeText(text)
                 self.statusMessage = success ? "已输入 ✓" : "输入失败 ✗"

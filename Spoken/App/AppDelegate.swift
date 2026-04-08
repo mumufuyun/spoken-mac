@@ -134,7 +134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 if let app = savedFrontmostApp {
                     print("Spoken: [DEBUG] activating frontmost app: \(app.localizedName ?? "unknown")")
-                    app.activate(options: [.activateIgnoringOtherApps])
+                    app.activate(options: [])
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         print("Spoken: [DEBUG] injecting text: \(textToInject)")
@@ -209,10 +209,7 @@ class RecordingViewModel: ObservableObject {
     var onComplete: ((String, NSRunningApplication?) -> Void)?
 
     func startRecording() {
-        // 保存当前前台应用
         frontmostApp = NSWorkspace.shared.frontmostApplication
-        print("Spoken: [DEBUG] RecordingViewModel frontmost app saved: \(frontmostApp?.localizedName ?? "unknown")")
-        
         isRecording = true
         partialText = ""
         lastRecognizedText = ""
@@ -230,28 +227,18 @@ class RecordingViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self?.isRecording = false
                     self?.partialText = ""
-                    self?.processAndInput(text)
+                    self?.processAndInput(text.isEmpty ? (self?.lastRecognizedText ?? "") : text)
                 }
             }
         )
     }
 
     func stopRecording() {
+        guard isRecording else { return }
         statusText = "正在识别..."
-        
-        // 使用新版的 stopRecording 方法，传入 onFinal 回调
-        SpeechService.shared.stopRecording(
-            onPartial: { _ in },
-            onFinal: { [weak self] text in
-                DispatchQueue.main.async {
-                    self?.isRecording = false
-                    self?.partialText = ""
-                    // 如果没有传入文本，使用最后识别到的文本
-                    let finalText = text.isEmpty ? (self?.lastRecognizedText ?? "") : text
-                    self?.processAndInput(finalText)
-                }
-            }
-        )
+        let textToSave = lastRecognizedText
+        SpeechService.shared.stopRecording()
+        processAndInput(textToSave)
     }
 
     private func processAndInput(_ text: String) {
@@ -260,11 +247,8 @@ class RecordingViewModel: ObservableObject {
             return
         }
         statusText = "已完成"
-        
-        // 保存要注入的文本和前台应用，避免闭包捕获问题
         let textToInject = text
         let savedFrontmostApp = frontmostApp
-        
         onComplete?(textToInject, savedFrontmostApp)
     }
 }
