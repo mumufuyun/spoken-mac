@@ -10,8 +10,11 @@ class SpeechService: ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var isRecording = false
     private var silenceTimer: Timer?
-    private var lastAudioTime: Date?
     private var timeoutTimer: Timer?
+    private var lastAudioTime = Date()
+    private var endTriggered = false  // 确保 endAudio 只触发一次
+    private var lastRecognizedText = ""  // 每次 partial 结果时更新
+
     private let silenceThreshold: TimeInterval = 2.0
 
     private init() {}
@@ -46,6 +49,9 @@ class SpeechService: ObservableObject {
     func startRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
         guard !isRecording else { return }
         isRecording = true
+        endTriggered = false
+        lastRecognizedText = ""
+        lastAudioTime = Date()
         print("Spoken: [DEBUG] startRecording called")
 
         audioEngine = AVAudioEngine()
@@ -64,7 +70,7 @@ class SpeechService: ObservableObject {
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         print("Spoken: [DEBUG] inputFormat: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
 
-        // tap 直接写给 recognitionRequest，每个 tap 回调都更新时间戳（原版逻辑）
+        // tap 直接写给 recognitionRequest
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             guard let self = self, self.isRecording else { return }
             self.recognitionRequest?.append(buffer)
@@ -89,17 +95,20 @@ class SpeechService: ObservableObject {
 
         timeoutTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
             guard let self = self, self.isRecording else { return }
-            print("Spoken: [DEBUG] timeout, stopping")
-            self.stopRecording()
+            print("Spoken: [DEBUG] timeout")
+            self.finishSilently(onPartial: onPartial, onFinal: onFinal)
         }
+
+        // Capture closures to avoid reference cycle
+        let capturedOnPartial = onPartial
+        let capturedOnFinal = onFinal
 
         let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN")) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self = self, self.isRecording else { return }
+            guard let self = self else { return }
 
             if let error = error {
                 let desc = error.localizedDescription.lowercased()
-                // 取消和结束不算致命错误
                 if desc.contains("cancel") || desc.contains("end") {
                     return
                 }
@@ -110,37 +119,88 @@ class SpeechService: ObservableObject {
             if let result = result {
                 let text = result.bestTranscription.formattedString
                 if !text.isEmpty {
-                    // 每次有结果都调用 onPartial
-                    DispatchQueue.main.async { onPartial(text) }
+                    self.lastRecognizedText = text
+                    DispatchQueue.main.async { capturedOnPartial(text) }
                 }
                 print("Spoken: [DEBUG] partial result: \(text)")
 
                 if result.isFinal {
                     let transcript = text
-                    print("Spoken: [DEBUG] final transcript: \(transcript)")
-                    self.stopRecording()
-                    DispatchQueue.main.async { onFinal(transcript) }
+                    print("Spoken: [DEBUG] isFinal transcript: \(transcript)")
+                    // 优先用 isFinal 的结果
+                    self.finishWithFinal(transcript: transcript, onPartial: capturedOnPartial, onFinal: capturedOnFinal)
                 }
             }
         }
     }
 
     private func checkSilence(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
-        guard isRecording, let lastTime = lastAudioTime else { return }
-
-        if Date().timeIntervalSince(lastTime) > silenceThreshold {
-            print("Spoken: [DEBUG] silence detected, stopping recording")
-            silenceTimer?.invalidate()
-            silenceTimer = nil
-            recognitionRequest?.endAudio()
+        guard isRecording else { return }
+        if Date().timeIntervalSince(lastAudioTime) > silenceThreshold {
+            print("Spoken: [DEBUG] silence threshold reached")
+            finishSilently(onPartial: onPartial, onFinal: onFinal)
         }
     }
 
-    func stopRecording() {
-        guard isRecording else { return }
-        isRecording = false
-        print("Spoken: [DEBUG] stopRecording called")
+    /// silence 超时触发：直接 capture 最后一个 partial 作为最终结果
+    /// 防止 isFinal 永远等不到导致的死锁
+    private func finishSilently(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
+        guard !endTriggered else { return }
+        endTriggered = true
 
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+
+        let finalText = lastRecognizedText
+        print("Spoken: [DEBUG] finishSilently: finalText='\(finalText)'")
+
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        isRecording = false
+        audioEngine = nil
+
+        DispatchQueue.main.async {
+            print("Spoken: [DEBUG] finishSilently calling onFinal with: '\(finalText)'")
+            onFinal(finalText)
+        }
+    }
+
+    /// isFinal 到达：优先用 recognizer 的最终结果
+    private func finishWithFinal(transcript: String, onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
+        guard !endTriggered else { return }
+        endTriggered = true
+
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+
+        print("Spoken: [DEBUG] finishWithFinal: transcript='\(transcript)'")
+
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        // 不 cancel，直接等 task 自然结束
+        isRecording = false
+        audioEngine = nil
+
+        DispatchQueue.main.async {
+            print("Spoken: [DEBUG] finishWithFinal calling onFinal with: '\(transcript)'")
+            onFinal(transcript)
+        }
+    }
+
+    // 旧版兼容性方法（不推荐使用，但为了保持代码兼容性）
+    func stopRecording() {
+        guard isRecording, !endTriggered else { return }
+        endTriggered = true
         silenceTimer?.invalidate()
         silenceTimer = nil
         timeoutTimer?.invalidate()
@@ -148,15 +208,41 @@ class SpeechService: ObservableObject {
 
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
-
-        // 只 endAudio 一次，防止重复调用
         recognitionRequest?.endAudio()
         recognitionRequest = nil
-
-        // cancel task 会触发 error callback（isRecording 已为 false，error 会被忽略）
         recognitionTask?.cancel()
         recognitionTask = nil
-
+        isRecording = false
         audioEngine = nil
+    }
+    
+    /// 新版 stopRecording，需要传入 onFinal 回调
+    func stopRecording(onPartial: @escaping (String) -> Void = { _ in }, onFinal: @escaping (String) -> Void = { _ in }) {
+        guard isRecording, !endTriggered else { return }
+        endTriggered = true
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+
+        // 保存最后一个识别到的文字
+        let finalText = lastRecognizedText
+        print("Spoken: [DEBUG] stopRecording: finalText='\(finalText)'")
+
+        // 停止音频引擎和识别任务
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        isRecording = false
+        audioEngine = nil
+
+        // 立即调用 onFinal，没有延迟
+        DispatchQueue.main.async {
+            print("Spoken: [DEBUG] stopRecording calling onFinal with: '\(finalText)'")
+            onFinal(finalText)
+        }
     }
 }

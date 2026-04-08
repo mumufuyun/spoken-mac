@@ -32,5 +32,7 @@
     <string>Spoken 需要使用麦克风来进行语音识别。</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Spoken 需要使用语音识别来将您的语音转换为文字。</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Spoken 需要使用辅助功能权限来将识别后的文本输入到目标输入框。</string>
 </dict>
 </plist>

@@ -9,23 +9,21 @@ class KeyboardService {
 
     private init() {}
 
-    func typeText(_ text: String) {
+    func typeText(_ text: String) -> Bool {
         print("Spoken: [DEBUG] KeyboardService.typeText: \(text)")
 
-        // 先用 CGEvent 方式
+        // 直接使用剪贴板方式，完全照搬 type4me 的实现
+        print("Spoken: [DEBUG] Using clipboard method")
         let outcome = engine.inject(text)
-        print("Spoken: [DEBUG] CGEvent outcome: \(outcome)")
-
-        // 如果剪贴板方式说 inserted 但实际上可能没进输入框，
-        // 尝试用 Accessibility API 直接设值作为补充
-        if outcome == .inserted {
-            let axSuccess = engine.injectViaAccessibility(text)
-            print("Spoken: [DEBUG] AX fallback: \(axSuccess)")
-        }
+        print("Spoken: [DEBUG] Clipboard outcome: \(outcome)")
+        let success = (outcome == .inserted)
 
         // 延迟恢复剪贴板
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             self?.engine.finishClipboardRestore()
         }
+
+        print("Spoken: [DEBUG] Final success: \(success)")
+        return success
     }
 }

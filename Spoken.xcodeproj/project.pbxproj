@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3955CA0E5F1D8B48FA0D5C76 /* AppDelegate.swift */; };
 		17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80D8DB3AB22966206517C70F /* ContentView.swift */; };
+		1AF7D80106A91C8805F01448 /* AccessibilityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0AC282F800D30021366934 /* AccessibilityService.swift */; };
 		39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB2856E4008DD751136C6955 /* KeyboardService.swift */; };
 		3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */; };
 		60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876CF505EC5F976A23DF7E41 /* HotKeyService.swift */; };
@@ -17,17 +18,20 @@
 		8C1F59F1AA0131173FEAB075 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C35543EA1D8AA432D86247B2 /* Assets.xcassets */; };
 		8E780E11AB623869A3F7ACB2 /* TextInjectionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */; };
 		B8372AFE48FCAFB291241A9C /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E81D41BC1FDD9172B9D55D6 /* Color+Hex.swift */; };
+		BE3C776CB7645AE9F8EE2EC6 /* WhisperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D5E930A20512BDD84912381 /* WhisperService.swift */; };
 		C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		2FA57F0A31DC35BC7A615EA5 /* Spoken.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Spoken.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3955CA0E5F1D8B48FA0D5C76 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		5C0AC282F800D30021366934 /* AccessibilityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityService.swift; sourceTree = "<group>"; };
 		671510E42D3AB924CD2B48D4 /* Spoken.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Spoken.entitlements; sourceTree = "<group>"; };
 		6D34239B1DE4FD221AA22A2D /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		76F4A99A2E36BB4C4068A3D6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		80D8DB3AB22966206517C70F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		876CF505EC5F976A23DF7E41 /* HotKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyService.swift; sourceTree = "<group>"; };
+		8D5E930A20512BDD84912381 /* WhisperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperService.swift; sourceTree = "<group>"; };
 		9E81D41BC1FDD9172B9D55D6 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjectionEngine.swift; sourceTree = "<group>"; };
 		BB2856E4008DD751136C6955 /* KeyboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardService.swift; sourceTree = "<group>"; };
@@ -41,12 +45,14 @@
 		1B8A6F544698795D23DDDFE2 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				5C0AC282F800D30021366934 /* AccessibilityService.swift */,
 				876CF505EC5F976A23DF7E41 /* HotKeyService.swift */,
 				BB2856E4008DD751136C6955 /* KeyboardService.swift */,
 				F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */,
 				E3C7B49D7F245B7BFE04FD46 /* NotificationService.swift */,
 				EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */,
 				B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */,
+				8D5E930A20512BDD84912381 /* WhisperService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -185,6 +191,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1AF7D80106A91C8805F01448 /* AccessibilityService.swift in Sources */,
 				118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */,
 				B8372AFE48FCAFB291241A9C /* Color+Hex.swift in Sources */,
 				17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */,
@@ -194,6 +201,7 @@
 				6961E4E359D5B549762C359E /* NotificationService.swift in Sources */,
 				3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */,
 				8E780E11AB623869A3F7ACB2 /* TextInjectionEngine.swift in Sources */,
+				BE3C776CB7645AE9F8EE2EC6 /* WhisperService.swift in Sources */,
 				863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

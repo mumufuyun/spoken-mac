@@ -38,9 +38,9 @@ class HotKeyService {
                             selfPtr,
                             &eventHandler)
 
-        // 注册快捷键：⌘ + ;
-        // ; = 0x29, Cmd = cmdKey (bit 8)
-        let modifiers: UInt32 = UInt32(cmdKey)
+        // 注册快捷键：⌥ + ;
+        // ; = 0x29, Option = optionKey (bit 11)
+        let modifiers: UInt32 = UInt32(optionKey)
         let keyCode: UInt32 = 0x29  // ;
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x534D4F53), // "SMOS"
@@ -53,7 +53,7 @@ class HotKeyService {
                             0,
                             &hotKeyRef)
 
-        print("Spoken: [DEBUG] HotKeyService registered (⌘;)")
+        print("Spoken: [DEBUG] HotKeyService registered (⌥;)")
     }
 
     func unregister() {

@@ -1,0 +1,272 @@
+import SwiftUI
+import CoreGraphics
+
+enum SpokenMode: String, CaseIterable {
+    case text = "文本优化"
+    case prompt = "Prompt"
+}
+
+struct ContentView: View {
+    @State private var mode: SpokenMode = .text
+    @State private var isRecording = false
+    @State private var isProcessing = false
+    @State private var statusMessage = "就绪"
+    @State private var frontmostApp: NSRunningApplication?
+    @State private var buttonScale: CGFloat = 1.0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 标题栏
+            HStack {
+                Text("Spoken")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("⌥; 快捷键")
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(hex: "#9CA3AF"))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // 模式切换
+            HStack(spacing: 6) {
+                ForEach(SpokenMode.allCases, id: \.self) { m in
+                    Button(action: { mode = m }) {
+                        Text(m.rawValue)
+                            .font(.system(size: 12, weight: mode == m ? .semibold : .regular))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(
+                                mode == m
+                                    ? AnyShapeStyle(Color(hex: "#4F7DF3"))
+                                    : AnyShapeStyle(Color(hex: "#F3F4F6"))
+                            )
+                            .foregroundColor(mode == m ? .white : Color(hex: "#6B7280"))
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+
+            Spacer().frame(height: 12)
+
+            // 中心按钮
+            RecordButton(
+                isRecording: isRecording,
+                isProcessing: isProcessing,
+                scale: buttonScale,
+                onTap: toggleRecording
+            )
+
+            Spacer().frame(height: 10)
+
+            // 状态文本
+            Text(statusMessage)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(statusColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .animation(.easeInOut(duration: 0.2), value: statusMessage)
+
+            // 辅助功能权限入口
+            if statusMessage == "请授权辅助功能权限" || statusMessage == "请授权麦克风权限" {
+                Button(action: {
+                    AccessibilityService.shared.openAccessibilityPreferences()
+                }) {
+                    Text("打开系统设置")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(hex: "#4F7DF3"))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
+
+            Spacer().frame(height: 12)
+        }
+        .frame(width: 260, height: 200)
+        .background(Color(hex: "#FAFAFA"))
+        .onAppear(perform: checkPermissions)
+    }
+
+    private var statusColor: Color {
+        if isProcessing { return Color(hex: "#6B7280") }
+        if isRecording { return Color(hex: "#EF4444") }
+        if statusMessage == "已输入" { return Color(hex: "#10B981") }
+        if statusMessage.contains("失败") || statusMessage.contains("错误") { return Color(hex: "#EF4444") }
+        return Color(hex: "#6B7280")
+    }
+
+    private func toggleRecording() {
+        if isRecording {
+            stopRecording()
+        } else {
+            startRecording()
+        }
+    }
+
+    private func checkPermissions() {
+        WhisperService.shared.requestPermissions { micGranted in
+            let accessibilityGranted = AccessibilityService.shared.isAccessibilityEnabled()
+            DispatchQueue.main.async {
+                if !micGranted {
+                    self.statusMessage = "请授权麦克风权限"
+                } else if !accessibilityGranted {
+                    self.statusMessage = "请授权辅助功能权限"
+                } else {
+                    self.statusMessage = "就绪"
+                }
+            }
+        }
+    }
+
+    private func startRecording() {
+        frontmostApp = NSWorkspace.shared.frontmostApplication
+        isRecording = true
+        statusMessage = "正在说话..."
+        withAnimation(.easeInOut(duration: 0.15)) {
+            buttonScale = 0.92
+        }
+
+        WhisperService.shared.startRecording(
+            onPartial: { [self] text in
+                DispatchQueue.main.async {
+                    self.statusMessage = text.isEmpty ? "正在说话..." : text
+                }
+            },
+            onFinal: { [self] transcript in
+                DispatchQueue.main.async {
+                    self.isRecording = false
+                    self.buttonScale = 1.0
+                    self.optimizeAndInput(transcript)
+                }
+            }
+        )
+    }
+
+    private func stopRecording() {
+        statusMessage = "正在识别..."
+        withAnimation(.easeInOut(duration: 0.15)) {
+            buttonScale = 1.0
+        }
+        WhisperService.shared.stopRecording()
+    }
+
+    private func optimizeAndInput(_ transcript: String) {
+        guard !transcript.isEmpty else {
+            statusMessage = "未识别到内容"
+            return
+        }
+
+        isProcessing = true
+        statusMessage = "AI 优化中..."
+
+        MiniMaxService.shared.optimize(text: transcript, mode: mode) { [self] result in
+            DispatchQueue.main.async {
+                self.isProcessing = false
+
+                let finalText: String
+                switch result {
+                case .success(let optimized):
+                    finalText = optimized.isEmpty ? transcript : optimized
+                case .failure(let error):
+                    print("Spoken: [ERROR] MiniMax failed: \(error.localizedDescription)")
+                    finalText = transcript
+                }
+
+                if let app = self.frontmostApp {
+                    app.activate(options: .activateIgnoringOtherApps)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        let success = KeyboardService.shared.typeText(finalText)
+                        self.statusMessage = success ? "已输入 ✓" : "输入失败 ✗"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            self.statusMessage = "就绪"
+                        }
+                    }
+                } else {
+                    let success = KeyboardService.shared.typeText(finalText)
+                    self.statusMessage = success ? "已输入 ✓" : "输入失败 ✗"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        self.statusMessage = "就绪"
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 录音按钮
+
+struct RecordButton: View {
+    let isRecording: Bool
+    let isProcessing: Bool
+    let scale: CGFloat
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                // 外圈
+                Circle()
+                    .stroke(
+                        isRecording ? Color(hex: "#EF4444") : Color(hex: "#4F7DF3"),
+                        lineWidth: 3
+                    )
+                    .frame(width: 64, height: 64)
+                    .scaleEffect(isRecording ? 1.0 : 0.95)
+
+                // 录音中呼吸动画
+                if isRecording {
+                    Circle()
+                        .fill(Color(hex: "#EF4444").opacity(0.15))
+                        .frame(width: 64, height: 64)
+                        .scaleEffect(1.0)
+                        .animation(
+                            .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                            value: isRecording
+                        )
+                }
+
+                // 中心图标
+                Group {
+                    if isProcessing {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.8)
+                    } else if isRecording {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.white)
+                            .frame(width: 18, height: 18)
+                    } else {
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                    }
+                }
+                .frame(width: 54, height: 54)
+                .background(
+                    Circle()
+                        .fill(
+                            isRecording
+                                ? AnyShapeStyle(Color(hex: "#EF4444"))
+                                : AnyShapeStyle(
+                                    LinearGradient(
+                                        colors: [Color(hex: "#4F7DF3"), Color(hex: "#6B5CE7")],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                        )
+                        .shadow(color: (isRecording ? Color(hex: "#EF4444") : Color(hex: "#4F7DF3")).opacity(0.4), radius: 8, x: 0, y: 4)
+                )
+            }
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(scale)
+        .disabled(isProcessing)
+    }
+}

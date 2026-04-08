@@ -1,8 +1,6 @@
 import AppKit
 import ApplicationServices
-import Carbon.HIToolbox
 
-/// 文本注入引擎 - 基于 type4me 实现
 enum InjectionOutcome {
     case inserted
     case copiedToClipboard
@@ -63,9 +61,13 @@ final class TextInjectionEngine: @unchecked Sendable {
         }
     }
 
-    // MARK: - Public
-
     var preserveClipboard = true
+    private var pendingClipboardRestore: PendingClipboardRestore?
+
+    private struct PendingClipboardRestore {
+        let snapshot: ClipboardSnapshot
+        let changeCount: Int
+    }
 
     func inject(_ text: String) -> InjectionOutcome {
         guard !text.isEmpty else { return .inserted }
@@ -79,35 +81,31 @@ final class TextInjectionEngine: @unchecked Sendable {
         pending.snapshot.restore(expectedChangeCount: pending.changeCount)
     }
 
-    func copyToClipboard(_ text: String) {
+    private func injectViaClipboard(_ text: String) -> InjectionOutcome {
+        let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
+        let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
+
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
-    }
+        let postWriteChangeCount = pb.changeCount
 
-    // MARK: - Private
-
-    private struct PendingClipboardRestore {
-        let snapshot: ClipboardSnapshot
-        let changeCount: Int
-    }
-
-    private var pendingClipboardRestore: PendingClipboardRestore?
-
-    private func injectViaClipboard(_ text: String) -> InjectionOutcome {
-        let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
-
-        let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
-
-        // 写剪贴板
-        copyToClipboard(text)
-        let postWriteChangeCount = NSPasteboard.general.changeCount
-
-        // type4me 精确时序：50µs 后发 paste，立即返回
-        // 不激活 app，不延迟
         usleep(50_000)
-        simulatePaste()
-        usleep(100_000)
+
+        let vKeyCode: CGKeyCode = 9
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: false)
+        else {
+            return .copiedToClipboard
+        }
+
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+
+        usleep(100)
 
         let outcome: InjectionOutcome = hasFrontmostApp ? .inserted : .copiedToClipboard
 
@@ -120,66 +118,5 @@ final class TextInjectionEngine: @unchecked Sendable {
         }
 
         return outcome
-    }
-
-    private func simulatePaste() {
-        // 关键：source 传 nil，macOS 自动选择正确的事件源
-        let vKeyCode: CGKeyCode = 9 // 'v'
-
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: false)
-        else { return }
-
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
-
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-    }
-
-    // MARK: - Accessibility API 直接设值（备选，不依赖焦点路由）
-
-    /// 直接通过 Accessibility API 设置焦点文本框的值
-    /// 如果 CGEvent 路由失败，尝试这个方法
-    func injectViaAccessibility(_ text: String) -> Bool {
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, 0.5)
-
-        var focusedElement: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedElement
-        )
-
-        guard status == .success, let element = focusedElement else {
-            print("TextInjectionEngine: AX - no focused element")
-            return false
-        }
-
-        let axElement = unsafeDowncast(element, to: AXUIElement.self)
-
-        // 检查是否可以设置 AXValue
-        var settable = DarwinBoolean(false)
-        AXUIElementIsAttributeSettable(axElement, kAXValueAttribute as CFString, &settable)
-
-        if settable.boolValue {
-            AXUIElementSetAttributeValue(axElement, kAXValueAttribute as CFString, text as CFTypeRef)
-            print("TextInjectionEngine: AX - set AXValue directly")
-            return true
-        }
-
-        // 如果是文本选择区域，尝试插入
-        var selectedRange: CFTypeRef?
-        let rangeStatus = AXUIElementCopyAttributeValue(axElement, kAXSelectedTextRangeAttribute as CFString, &selectedRange)
-
-        if rangeStatus == .success {
-            AXUIElementSetAttributeValue(axElement, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
-            print("TextInjectionEngine: AX - set AXSelectedText directly")
-            return true
-        }
-
-        print("TextInjectionEngine: AX - could not set value")
-        return false
     }
 }
