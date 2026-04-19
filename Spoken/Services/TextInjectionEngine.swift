@@ -99,58 +99,22 @@ final class TextInjectionEngine: @unchecked Sendable {
 
         usleep(50_000)
 
-        // Detect IDEs upfront - they don't support AX value setting reliably
-        // Use specific bundle ID patterns to avoid false positives with non-IDE apps
-        let isIDE: Bool
-        if let frontmostApp = NSWorkspace.shared.frontmostApplication,
-           let bundleID = frontmostApp.bundleIdentifier {
-            isIDE = bundleID.hasPrefix("com.microsoft.VSCode") ||       // VSCode / VSCode Insiders
-                    bundleID.hasPrefix("com.bytedance.trae") ||         // Trae
-                    bundleID.hasPrefix("com.lingma.trae") ||            // Trae (alternate)
-                    bundleID == "com.todeski.cursor" ||                  // Cursor
-                    bundleID.hasPrefix("com.cursor") ||                  // Cursor (newer)
-                    bundleID.hasPrefix("com.jetbrains.") ||              // JetBrains IDEs
-                    bundleID.hasPrefix("com.google.androidstudio")       // Android Studio
-            if isIDE {
-                print("Spoken: [DEBUG] Detected IDE (\(bundleID)), skipping AX direct set")
-            }
-        } else {
-            isIDE = false
-        }
+        // Use paste simulation for all apps.
+        // AX direct value set is unreliable for Electron/Web apps and custom input fields,
+        // causing text to become non-interactive static content.
+        // Priority: CGEvent (system-level, most reliable) → osascript (fallback)
 
-        // Try paste methods in order: AX → osascript → CGEvent
-        // Each method is tried only if the previous one failed
         var pasteSucceeded = false
-        
-        if !isIDE {
-            pasteSucceeded = tryAXSetFocusedTextValue(text)
-            if pasteSucceeded {
-                print("Spoken: [DEBUG] AX direct value set succeeded")
-            }
-        }
-
-        if !pasteSucceeded {
-            print("Spoken: [DEBUG] AX skipped/failed, trying osascript paste")
+        if AXIsProcessTrusted() {
+            simulatePasteCGEvent()
+            usleep(100_000)
+            pasteSucceeded = true
+        } else {
+            print("Spoken: [WARN] AX not trusted, falling back to osascript paste")
             pasteSucceeded = simulatePasteViaOsascript()
-            if pasteSucceeded {
-                print("Spoken: [DEBUG] osascript paste succeeded")
-            }
         }
 
-        if !pasteSucceeded {
-            print("Spoken: [DEBUG] osascript failed, trying CGEvent paste")
-            let axTrusted = AXIsProcessTrusted()
-            if axTrusted {
-                simulatePasteCGEvent()
-                usleep(100_000)
-                pasteSucceeded = true
-            }
-        }
-
-        // 根据文本长度动态调整等待时间，确保目标应用完成渲染
-        // 短文本 150ms，长文本按比例增加（每字符 0.1ms，上限 800ms）
-        let renderWait = min(800_000, UInt32(max(150_000, text.count * 100)))
-        usleep(renderWait)
+        usleep(150_000)
 
         let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
         let outcome: InjectionOutcome = hasFrontmostApp ? .inserted : .copiedToClipboard

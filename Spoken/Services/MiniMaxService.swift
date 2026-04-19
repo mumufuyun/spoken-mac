@@ -7,6 +7,14 @@ class MiniMaxService {
     private let apiKey = "sk-cp-Feg_2DXayfN4ChLCbLTk3LvnnJRslowaGwb4grRbyTHNnjS4fJ-SvNRLRw2G62imJUoKVJG55blkhjnQ7V6o9Q1f-el5TfR5WDQj9q6l_LhyEsY16h0vB_E"
     private let baseURL = "https://api.minimax.chat/v1"
 
+    // Common instruction for fixing speech-to-text English word errors in Chinese context
+    private let mixedLangCorrection = """
+        #中英文混合识别修正
+        用户说话时经常中英混杂（如"这个API的bug需要fix"）。但语音识别会将英文单词错误转为发音相似的中文（如"API"→"阿皮哎"、"bug"→"八哥"、"OK"→"欧克"）。
+        请根据上下文语义，将明显是英文音译的中文还原为正确的英文单词。常见模式：技术术语（API、SDK、bug、debug、deploy、commit、PR、review）、产品名（iPhone、MacBook、GitHub、Docker）、日常英文（OK、Hi、email、PM、APP）。
+        修正后保持自然的中英文混排方式，英文单词前后不额外加空格。
+        """
+
     private init() {}
 
     // MARK: - 统一处理入口
@@ -58,6 +66,7 @@ class MiniMaxService {
 
         #语音识别错误修正
         语音识别经常产生同音词错误，如"瑞士"→"润色"、"绿色"→"润色"等。遇到上下文明显不通顺的地方，应根据语义推断并修正这类错误。
+        \(mixedLangCorrection)
 
         #示例：
         输入：我觉得阅读有很多好处嗯就是比如说如果你爱看小说你可以看到很多种人生然后当事情发生在你身上你就会比较平静还有就是看经济政治历史之类的书会让你对社会有自己的认知然后相比于刷短视频我觉得阅读是一个很健康的活动
@@ -81,6 +90,7 @@ class MiniMaxService {
         3. 保留原文的完整意图，优化表达结构、指令清晰度和输出约束
         4. 如果用户输入信息不足，根据上下文合理补充必要信息，不要过度发挥
         5. 直接返回优化后的 Prompt，不添加任何解释
+        \(mixedLangCorrection)
 
         参考结构（根据内容需要灵活使用）：
         【角色】定义 AI 的专业领域或身份（如果原文未提及，根据意图推断）
@@ -145,6 +155,7 @@ class MiniMaxService {
         5. 如果内容涉及多个主题，用 bullet points 分别列出
         6. 摘要长度控制在原文的 1/3 到 1/5
         7. 直接返回摘要结果，不添加任何解释
+        \(mixedLangCorrection)
 
         以下是语音识别的原始输出，请生成摘要：
         \(text)
@@ -166,6 +177,7 @@ class MiniMaxService {
         5. 保持所有原始信息，不要删减实质内容
         6. 适当使用换行和缩进体现层级关系
         7. 直接返回格式化后的内容，不添加任何解释
+        \(mixedLangCorrection)
 
         以下是语音识别的原始输出，请整理为结构化格式：
         \(text)
