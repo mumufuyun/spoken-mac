@@ -19,7 +19,7 @@ enum TranslateLanguage: String, CaseIterable {
 struct ContentView: View {
     @State private var mode: SpokenMode = .direct
     @State private var translateLang: TranslateLanguage = .english
-    @State private var statusMessage = "Spoken"
+    @State private var statusMessage = "语言是最好的输入"
 
     // ElevenLabs Warm Palette
     private let textSecondary = Color(hex: "#4e4e4e")

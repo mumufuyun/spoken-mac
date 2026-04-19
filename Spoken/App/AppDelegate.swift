@@ -75,6 +75,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 button.title = "🎤"
             }
+            button.toolTip = "语言是最好的输入"
             button.action = #selector(togglePopover)
             button.target = self
         }
@@ -445,6 +446,15 @@ struct RecordingPanelView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .tracking(0.14)
                     .foregroundColor(textSecondary)
+
+                Text("·")
+                    .font(.system(size: 12, weight: .light))
+                    .foregroundColor(textMuted)
+
+                Text("语言是最好的输入")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(textMuted)
+                    .tracking(0.14)
 
                 Spacer()
 

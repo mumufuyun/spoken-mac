@@ -106,7 +106,7 @@ final class TextInjectionEngine: @unchecked Sendable {
             isIDE = bundleID.contains("vscode") || bundleID.contains("code") ||
                     bundleID.contains("trae") || bundleID.contains("cursor") ||
                     bundleID.contains("jetbrains") || bundleID.contains("intellij") ||
-                    bundleID.contains("com.microsoft.VSCode") || bundleID.contains("com.larkstudio")
+                    bundleID.contains("com.microsoft.VSCode")
             if isIDE {
                 print("Spoken: [DEBUG] Detected IDE (\(bundleID)), skipping AX direct set")
             }
