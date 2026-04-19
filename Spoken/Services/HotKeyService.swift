@@ -10,14 +10,25 @@ class HotKeyService {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
 
-    // 回调：当快捷键被触发时
     var onTriggered: (() -> Void)?
+
+    struct HotKeyConfig {
+        var option: Bool
+        var shift: Bool
+        var space: Bool
+    }
+
+    private var currentConfig = HotKeyConfig(option: true, shift: false, space: false)
 
     init() {}
 
-    // MARK: - 注册快捷键 (⌘ + ;)
+    // MARK: - 注册快捷键
 
-    func register() {
+    func register(config: HotKeyConfig? = nil) {
+        if let config = config {
+            currentConfig = config
+        }
+
         // 事件类型：按下时触发
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                        eventKind: UInt32(kEventHotKeyPressed))
@@ -26,34 +37,43 @@ class HotKeyService {
         let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
             guard let userData = userData else { return OSStatus(eventNotHandledErr) }
             let service = Unmanaged<HotKeyService>.fromOpaque(userData).takeUnretainedValue()
+            NSLog("Spoken: [DEBUG] HotKey triggered")
+            
             service.onTriggered?()
             return noErr
         }
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetApplicationEventTarget(),
+        let handlerInstalled = InstallEventHandler(GetApplicationEventTarget(),
                             handler,
                             1,
                             &eventType,
                             selfPtr,
                             &eventHandler)
+        NSLog("Spoken: [DEBUG] Event handler installed: %d", handlerInstalled)
 
-        // 注册快捷键：⌥ + ;
-        // ; = 0x29, Option = optionKey (bit 11)
-        let modifiers: UInt32 = UInt32(optionKey)
-        let keyCode: UInt32 = 0x29  // ;
+        // 注册快捷键：⌥ + 空格（默认）
+        let modifiers: UInt32 = computeModifiers()
+        let keyCode: UInt32 = currentConfig.space ? 0x31 : 0x31  // 空格
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x534D4F53), // "SMOS"
                                       id: 1)
 
-        RegisterEventHotKey(keyCode,
+        let result = RegisterEventHotKey(keyCode,
                             modifiers,
                             hotKeyID,
                             GetApplicationEventTarget(),
                             0,
                             &hotKeyRef)
+        NSLog("Spoken: [DEBUG] HotKey registered with result: %d", result)
+    }
 
-        print("Spoken: [DEBUG] HotKeyService registered (⌥;)")
+    private func computeModifiers() -> UInt32 {
+        var modifiers: UInt32 = 0
+        if currentConfig.option { modifiers |= UInt32(optionKey) }
+        if currentConfig.shift { modifiers |= UInt32(shiftKey) }
+        if currentConfig.space { /* space is handled by keyCode */ }
+        return modifiers
     }
 
     func unregister() {
@@ -65,6 +85,14 @@ class HotKeyService {
             RemoveEventHandler(eventHandler)
             self.eventHandler = nil
         }
+    }
+
+    func unregisterAll() {
+        unregister()
+    }
+
+    func registerOptionSpaceHotKey() {
+        register()
     }
 
     deinit {

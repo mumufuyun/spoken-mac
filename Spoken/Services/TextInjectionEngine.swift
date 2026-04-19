@@ -71,42 +71,81 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     func inject(_ text: String) -> InjectionOutcome {
         guard !text.isEmpty else { return .inserted }
+
         return injectViaClipboard(text)
     }
 
     func finishClipboardRestore() {
         guard let pending = pendingClipboardRestore else { return }
         pendingClipboardRestore = nil
-        usleep(50_000)
+        usleep(300_000)
         pending.snapshot.restore(expectedChangeCount: pending.changeCount)
     }
 
     private func injectViaClipboard(_ text: String) -> InjectionOutcome {
         let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
-        let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
+
+        // Enable AX tree for Electron apps (Feishu, VS Code, etc.)
+        if let frontmostApp = NSWorkspace.shared.frontmostApplication {
+            enableEnhancedAX(for: frontmostApp)
+            usleep(50_000)
+        }
 
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
         let postWriteChangeCount = pb.changeCount
+        print("Spoken: [DEBUG] clipboard written: \(pb.string(forType: .string)?.prefix(30) ?? "nil")")
 
         usleep(50_000)
 
-        let vKeyCode: CGKeyCode = 9
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: false)
-        else {
-            return .copiedToClipboard
+        // Detect IDEs upfront - they don't support AX value setting reliably
+        let isIDE: Bool
+        if let frontmostApp = NSWorkspace.shared.frontmostApplication,
+           let bundleID = frontmostApp.bundleIdentifier {
+            isIDE = bundleID.contains("vscode") || bundleID.contains("code") ||
+                    bundleID.contains("trae") || bundleID.contains("cursor") ||
+                    bundleID.contains("jetbrains") || bundleID.contains("intellij") ||
+                    bundleID.contains("com.microsoft.VSCode") || bundleID.contains("com.larkstudio")
+            if isIDE {
+                print("Spoken: [DEBUG] Detected IDE (\(bundleID)), skipping AX direct set")
+            }
+        } else {
+            isIDE = false
         }
 
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
+        // Try paste methods in order: AX → osascript → CGEvent
+        // Each method is tried only if the previous one failed
+        var pasteSucceeded = false
+        
+        if !isIDE {
+            pasteSucceeded = tryAXSetFocusedTextValue(text)
+            if pasteSucceeded {
+                print("Spoken: [DEBUG] AX direct value set succeeded")
+            }
+        }
 
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        if !pasteSucceeded {
+            print("Spoken: [DEBUG] AX skipped/failed, trying osascript paste")
+            pasteSucceeded = simulatePasteViaOsascript()
+            if pasteSucceeded {
+                print("Spoken: [DEBUG] osascript paste succeeded")
+            }
+        }
+
+        if !pasteSucceeded {
+            print("Spoken: [DEBUG] osascript failed, trying CGEvent paste")
+            let axTrusted = AXIsProcessTrusted()
+            if axTrusted {
+                simulatePasteCGEvent()
+                usleep(100_000)
+                pasteSucceeded = true
+            }
+        }
 
         usleep(100_000)
 
+        let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
         let outcome: InjectionOutcome = hasFrontmostApp ? .inserted : .copiedToClipboard
 
         if outcome == .inserted, let savedClipboard {
@@ -118,5 +157,94 @@ final class TextInjectionEngine: @unchecked Sendable {
         }
 
         return outcome
+    }
+
+    // MARK: - AX Direct Value Set (Most Reliable)
+
+    private func tryAXSetFocusedTextValue(_ text: String) -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(axApp, 0.3)
+
+        var focusedObj: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedObj) == .success,
+              let focusedElement = focusedObj as! AXUIElement? else {
+            print("Spoken: [DEBUG] AX: no focused element")
+            return false
+        }
+
+        let setResult = AXUIElementSetAttributeValue(focusedElement, kAXValueAttribute as CFString, text as CFTypeRef)
+        if setResult == .success {
+            return true
+        }
+        print("Spoken: [DEBUG] AX setValue failed: \(setResult.rawValue)")
+        return false
+    }
+
+    // MARK: - AX Helper
+
+    private func enableEnhancedAX(for app: NSRunningApplication) {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.3)
+        var windowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &windowValue
+        ) == .success, let windowValue else { return }
+        let window = unsafeDowncast(windowValue, to: AXUIElement.self)
+        AXUIElementSetAttributeValue(
+            window,
+            "AXEnhancedUserInterface" as CFString,
+            true as CFTypeRef
+        )
+        print("Spoken: [DEBUG] enabled AXEnhancedUserInterface for \(app.localizedName ?? "unknown")")
+    }
+
+    // MARK: - osascript Paste
+
+    private func simulatePasteViaOsascript() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e", "tell application \"System Events\" to keystroke \"v\" using command down"
+        ]
+
+        let pipe = Pipe()
+        process.standardError = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let exitCode = process.terminationStatus
+            if exitCode == 0 {
+                print("Spoken: [DEBUG] osascript exit code: 0")
+                return true
+            } else {
+                let errorData = pipe.fileHandleForReading.readDataToEndOfFile()
+                let errorMessage = String(data: errorData, encoding: .utf8) ?? "unknown"
+                print("Spoken: [DEBUG] osascript exit code: \(exitCode), error: \(errorMessage.trimmingCharacters(in: .whitespacesAndNewlines))")
+                return false
+            }
+        } catch {
+            print("Spoken: [ERROR] osascript execution failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - CGEvent Paste
+
+    private func simulatePasteCGEvent() {
+        let vKeyCode: CGKeyCode = 9
+
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: false)
+        else { return }
+
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
     }
 }
