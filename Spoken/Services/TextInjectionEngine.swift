@@ -147,7 +147,10 @@ final class TextInjectionEngine: @unchecked Sendable {
             }
         }
 
-        usleep(100_000)
+        // 根据文本长度动态调整等待时间，确保目标应用完成渲染
+        // 短文本 150ms，长文本按比例增加（每字符 0.1ms，上限 800ms）
+        let renderWait = min(800_000, UInt32(max(150_000, text.count * 100)))
+        usleep(renderWait)
 
         let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
         let outcome: InjectionOutcome = hasFrontmostApp ? .inserted : .copiedToClipboard
