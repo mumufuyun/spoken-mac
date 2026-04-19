@@ -100,13 +100,17 @@ final class TextInjectionEngine: @unchecked Sendable {
         usleep(50_000)
 
         // Detect IDEs upfront - they don't support AX value setting reliably
+        // Use specific bundle ID patterns to avoid false positives with non-IDE apps
         let isIDE: Bool
         if let frontmostApp = NSWorkspace.shared.frontmostApplication,
            let bundleID = frontmostApp.bundleIdentifier {
-            isIDE = bundleID.contains("vscode") || bundleID.contains("code") ||
-                    bundleID.contains("trae") || bundleID.contains("cursor") ||
-                    bundleID.contains("jetbrains") || bundleID.contains("intellij") ||
-                    bundleID.contains("com.microsoft.VSCode")
+            isIDE = bundleID.hasPrefix("com.microsoft.VSCode") ||       // VSCode / VSCode Insiders
+                    bundleID.hasPrefix("com.bytedance.trae") ||         // Trae
+                    bundleID.hasPrefix("com.lingma.trae") ||            // Trae (alternate)
+                    bundleID == "com.todeski.cursor" ||                  // Cursor
+                    bundleID.hasPrefix("com.cursor") ||                  // Cursor (newer)
+                    bundleID.hasPrefix("com.jetbrains.") ||              // JetBrains IDEs
+                    bundleID.hasPrefix("com.google.androidstudio")       // Android Studio
             if isIDE {
                 print("Spoken: [DEBUG] Detected IDE (\(bundleID)), skipping AX direct set")
             }
