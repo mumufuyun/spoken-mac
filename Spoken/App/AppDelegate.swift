@@ -579,49 +579,6 @@ struct RecordingPanelView: View {
     }
 }
 
-// MARK: - 波形动画条
-
-struct WaveBar: View {
-    let index: Int
-    let isRecording: Bool
-
-    @State private var animHeight: CGFloat = 6
-
-    private let barWidth: CGFloat = 4
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(
-                LinearGradient(
-                    colors: isRecording
-                        ? [Color(hex: "#c0392b"), Color(hex: "#e74c3c")]
-                        : [Color(hex: "#4e4e4e"), Color(hex: "#6e6e6e")],
-                    startPoint: .bottom,
-                    endPoint: .top
-                )
-            )
-            .frame(width: barWidth, height: animHeight)
-            .animation(
-                .easeInOut(duration: 0.6)
-                    .repeatForever(autoreverses: true)
-                    .delay(Double(index) * 0.1),
-                value: animHeight
-            )
-            .onAppear {
-                if isRecording {
-                    animHeight = CGFloat.random(in: 10...32)
-                }
-            }
-            .onChange(of: isRecording) { _, newValue in
-                if newValue {
-                    animHeight = CGFloat.random(in: 10...32)
-                } else {
-                    animHeight = 6
-                }
-            }
-    }
-}
-
 // MARK: - 波形动画视图
 
 struct WaveformView: View {
@@ -699,25 +656,5 @@ struct WaveformView: View {
         timer?.invalidate()
         timer = nil
         barHeights = Array(repeating: 6, count: barHeights.count)
-    }
-}
-
-// MARK: - Visual Effect View
-
-struct VisualEffectView: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-    let blendingMode: NSVisualEffectView.BlendingMode
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
     }
 }

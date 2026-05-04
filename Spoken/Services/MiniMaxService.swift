@@ -4,7 +4,19 @@ import Foundation
 class MiniMaxService {
     static let shared = MiniMaxService()
 
-    private let apiKey = "sk-cp-Feg_2DXayfN4ChLCbLTk3LvnnJRslowaGwb4grRbyTHNnjS4fJ-SvNRLRw2G62imJUoKVJG55blkhjnQ7V6o9Q1f-el5TfR5WDQj9q6l_LhyEsY16h0vB_E"
+    // API Key 从 Keychain 读取，首次运行需手动配置
+    // 配置方式：在终端运行 defaults write com.moss.Spoken MiniMaxAPIKey "your-api-key"
+    private var apiKey: String {
+        if let key = SecureKeyStorage.shared.readAPIKey(), !key.isEmpty {
+            return key
+        }
+        if let key = UserDefaults.standard.string(forKey: "MiniMaxAPIKey"), !key.isEmpty {
+            SecureKeyStorage.shared.saveAPIKey(key)
+            UserDefaults.standard.removeObject(forKey: "MiniMaxAPIKey")
+            return key
+        }
+        return ""
+    }
     private let baseURL = "https://api.minimax.chat/v1"
 
     // Common instruction for fixing speech-to-text English word errors in Chinese context

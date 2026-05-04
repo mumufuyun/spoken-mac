@@ -130,28 +130,6 @@ final class TextInjectionEngine: @unchecked Sendable {
         return outcome
     }
 
-    // MARK: - AX Direct Value Set (Most Reliable)
-
-    private func tryAXSetFocusedTextValue(_ text: String) -> Bool {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(axApp, 0.3)
-
-        var focusedObj: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedObj) == .success,
-              let focusedElement = focusedObj as! AXUIElement? else {
-            print("Spoken: [DEBUG] AX: no focused element")
-            return false
-        }
-
-        let setResult = AXUIElementSetAttributeValue(focusedElement, kAXValueAttribute as CFString, text as CFTypeRef)
-        if setResult == .success {
-            return true
-        }
-        print("Spoken: [DEBUG] AX setValue failed: \(setResult.rawValue)")
-        return false
-    }
-
     // MARK: - AX Helper
 
     private func enableEnhancedAX(for app: NSRunningApplication) {
