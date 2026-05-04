@@ -118,18 +118,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if recordingPanel?.isVisible == true {
-            // 用户再次按快捷键，停止录音但保持面板显示
-            recordingViewModel.stopRecording()
-            // 不要隐藏面板，等待注入完成后再隐藏
+            if recordingViewModel.isRecording {
+                // 录音中 → 停止录音，继续 AI 处理
+                recordingViewModel.stopRecording()
+            } else {
+                // 其他阶段 → 取消整个流程
+                recordingViewModel.cancel()
+            }
             return
         }
         showRecordingPanel()
     }
     
     private func closeRecordingPanel() {
-        // 停止录音，这会触发 onComplete 回调
-        recordingViewModel.stopRecording()
-        // 隐藏录音面板
+        recordingViewModel.cancel()
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
     }
@@ -170,8 +172,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ))
         }
 
+        viewModel.onCancel = { [weak self] in
+            guard let strongSelf = self else { return }
+            strongSelf.stateManager.transition(to: .idle)
+            // 显示已取消 1.0 秒后关闭
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                strongSelf.recordingPanel?.orderOut(nil)
+                strongSelf.recordingPanel = nil
+            }
+        }
+        
         viewModel.onClose = { [weak self] in
-            self?.closeRecordingPanel()
+            self?.recordingPanel?.orderOut(nil)
+            self?.recordingPanel = nil
         }
 
         viewModel.onComplete = { [weak self] text, appFromViewModel in
@@ -322,12 +335,14 @@ class RecordingViewModel: ObservableObject {
     @Published var isProcessing = false
     @Published var partialText = ""
     @Published var statusText = "正在聆听..."
+    @Published var isCancelled = false
     private var frontmostApp: NSRunningApplication?
     private var lastRecognizedText = ""
     private let stateManager = StateManager.shared
 
     var onClose: (() -> Void)?
     var onComplete: ((String, NSRunningApplication?) -> Void)?
+    var onCancel: (() -> Void)?
 
     func startRecording() {
         frontmostApp = NSWorkspace.shared.frontmostApplication
@@ -362,14 +377,33 @@ class RecordingViewModel: ObservableObject {
         )
     }
 
+    /// 取消整个流程（录音中/AI处理中均可取消）
+    func cancel() {
+        if isCancelled { return }
+        isCancelled = true
+
+        // 1. 取消录音
+        SpeechService.shared.cancelRecording()
+
+        // 2. 取消 AI 网络请求
+        MiniMaxService.shared.cancelCurrentTask()
+
+        // 3. 更新 UI
+        statusText = "已取消"
+        isRecording = false
+        isProcessing = false
+
+        // 4. 回调
+        onCancel?()
+    }
+
+    /// 停止录音（用户再次按快捷键），继续 AI 处理流程
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
         statusText = "正在识别..."
-        // 状态转换：recording -> finishing（StateManager 会防止重复转换）
         stateManager.transition(to: .finishing)
         SpeechService.shared.stopRecording()
-        // 不调用 processAndInput，等待 SpeechService 的 onFinal 回调
     }
 
     private func processAndInput(_ text: String) {
@@ -536,35 +570,66 @@ struct RecordingPanelView: View {
 
             Spacer().frame(height: 14)
 
-            // 底部提示
+            // 底部提示与操作区
             HStack {
-                if viewModel.isProcessing {
-                    Text("AI 处理中...")
-                        .font(.system(size: 11, weight: .regular))
-                        .tracking(0.14)
-                        .foregroundColor(Color(hex: "#f39c12"))
-                } else if viewModel.isRecording {
-                    Text("再次按 ⌥+空格 结束录音")
+                if viewModel.isCancelled {
+                    Text("已取消")
                         .font(.system(size: 11, weight: .regular))
                         .tracking(0.14)
                         .foregroundColor(textMuted)
+                } else if viewModel.isProcessing {
+                    HStack(spacing: 10) {
+                        Text("AI 处理中...")
+                            .font(.system(size: 11, weight: .regular))
+                            .tracking(0.14)
+                            .foregroundColor(Color(hex: "#f39c12"))
+                        Spacer()
+                        Button("取消") {
+                            viewModel.cancel()
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "#c0392b"))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(Color(hex: "#f5f2ef"))
+                        .cornerRadius(6)
+                        .buttonStyle(.plain)
+                    }
+                } else if viewModel.isRecording {
+                    HStack(spacing: 10) {
+                        Text("再次按 ⌥+空格 结束")
+                            .font(.system(size: 11, weight: .regular))
+                            .tracking(0.14)
+                            .foregroundColor(textMuted)
+                        Spacer()
+                        Button("取消") {
+                            viewModel.cancel()
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "#c0392b"))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(Color(hex: "#f5f2ef"))
+                        .cornerRadius(6)
+                        .buttonStyle(.plain)
+                    }
                 } else {
                     Text("按 ⌥+空格 开始录音")
                         .font(.system(size: 11, weight: .regular))
                         .tracking(0.14)
                         .foregroundColor(textMuted)
+                    Spacer()
                 }
 
-                Spacer()
-
-                Button(action: { viewModel.onClose?() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(textMuted.opacity(0.5))
+                // 关闭按钮（非活跃状态时显示）
+                if !viewModel.isRecording && !viewModel.isProcessing && !viewModel.isCancelled {
+                    Button(action: { viewModel.onClose?() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(textMuted.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .opacity(viewModel.isRecording ? 0.4 : 1)
-                .disabled(viewModel.isRecording)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 14)

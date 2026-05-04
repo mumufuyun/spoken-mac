@@ -19,6 +19,8 @@ class MiniMaxService {
     }
     private let baseURL = "https://api.minimax.chat/v1"
 
+    private var currentTask: URLSessionDataTask?
+
     // Common instruction for fixing speech-to-text English word errors in Chinese context
     private let mixedLangCorrection = """
         #中英文混合识别修正
@@ -37,20 +39,68 @@ class MiniMaxService {
         translateLang: TranslateLanguage,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
+        let aiTimeout = 15.0
+
         switch mode {
         case .direct:
             completion(.success(text))
         case .polish:
-            polish(text: text, completion: completion)
+            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+                self.polish(text: text, completion: cb)
+            }
         case .prompt:
-            toPrompt(text: text, completion: completion)
+            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+                self.toPrompt(text: text, completion: cb)
+            }
         case .translate:
-            translate(text: text, to: translateLang, completion: completion)
+            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+                self.translate(text: text, to: translateLang, completion: cb)
+            }
         case .summarize:
-            summarize(text: text, completion: completion)
+            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+                self.summarize(text: text, completion: cb)
+            }
         case .format:
-            format(text: text, completion: completion)
+            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+                self.format(text: text, completion: cb)
+            }
         }
+    }
+
+    /// 调用带超时的 AI，超时后降级返回原文
+    private func callWithTimeout(
+        timeout: TimeInterval,
+        originalText: String,
+        call: @escaping (@escaping (Result<String, Error>) -> Void) -> Void
+    ) {
+        var completed = false
+
+        let timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { _ in
+            guard !completed else { return }
+            completed = true
+            self.cancelCurrentTask()
+            print("Spoken: [WARN] AI timeout, falling back to original text")
+            DispatchQueue.main.async {
+                self.completionHandler?(.success(originalText))
+            }
+        }
+
+        call { [weak self] result in
+            guard let strongSelf = self else { return }
+            guard !completed else { return }
+            timer.invalidate()
+            completed = true
+            strongSelf.completionHandler?(result)
+        }
+    }
+
+    private var completionHandler: ((Result<String, Error>) -> Void)?
+
+    func cancelCurrentTask() {
+        currentTask?.cancel()
+        currentTask = nil
+        completionHandler?(.failure(MiniMaxError.cancelled))
+        completionHandler = nil
     }
 
     // MARK: - 润色
@@ -241,6 +291,11 @@ class MiniMaxService {
 
         let task = URLSession.shared.dataTask(with: request) { rawData, response, error in
             if let error = error {
+                // 用户取消
+                if (error as NSError).code == NSURLErrorCancelled {
+                    completion(.failure(MiniMaxError.cancelled))
+                    return
+                }
                 // 超时或网络错误时重试一次
                 if retryCount < 1 {
                     DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
@@ -306,6 +361,7 @@ class MiniMaxService {
             }
         }
         task.resume()
+        currentTask = task
     }
 }
 
@@ -316,6 +372,8 @@ enum MiniMaxError: LocalizedError {
     case noData
     case parseError
     case apiError(code: Int, message: String)
+    case timeout
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -323,6 +381,8 @@ enum MiniMaxError: LocalizedError {
         case .noData: return "服务器未返回数据"
         case .parseError: return "响应解析失败"
         case .apiError(let code, let message): return "API 错误 (\(code)): \(message)"
+        case .timeout: return "AI 处理超时，已使用原文"
+        case .cancelled: return "操作已取消"
         }
     }
 }

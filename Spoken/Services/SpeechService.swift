@@ -14,6 +14,7 @@ class SpeechService: NSObject, ObservableObject {
     private var endTriggered = false
     private var lastRecognizedText = ""
     private var audioReceived = false
+    private var timeoutTimer: Timer?
 
     private var capturedOnPartial: ((String) -> Void)?
     private var capturedOnFinal: ((String) -> Void)?
@@ -78,6 +79,16 @@ class SpeechService: NSObject, ObservableObject {
 
     func startRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
         guard !isRecording else { return }
+
+        // 30 秒超时：超时后自动停止并返回当前识别结果
+        timeoutTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { [weak self] _ in
+            guard let self = self, self.isRecording, !self.isCancelled else { return }
+            print("Spoken: [WARN] Recording timeout at 30s, stopping with current text")
+            let text = self.lastRecognizedText
+            self.cancelRecording()
+            self.capturedOnPartial?("")
+            onFinal(text)
+        }
 
         installTapAndStart(onPartial: onPartial, onFinal: onFinal, retryCount: 0)
     }
@@ -205,13 +216,52 @@ class SpeechService: NSObject, ObservableObject {
     }
 
     private var isStopping = false
+    private var isCancelled = false
 
     // MARK: - 停止录音
 
+    /// 正常停止录音（静音触发或用户主动停止），会触发 onFinal 回调
     private func stopAndFinish(lastText: String) {
         guard !endTriggered else { return }
         guard !isStopping else { return }
         isStopping = true
+        endTriggered = true
+
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+
+        audioEngine.inputNode.removeTap(onBus: 0)
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        isRecording = false
+        isCancelled = false
+
+        usleep(stopBufferMs)
+
+        recognitionTask?.finish()
+        recognitionTask = nil
+
+        let text = lastText.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("Spoken: [DEBUG] stopAndFinish: finalText='\(text)'")
+
+        isStopping = false
+        capturedOnFinal?(text)
+    }
+
+    /// 取消录音（用户主动取消），不触发 onFinal 回调
+    func cancelRecording() {
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+        
+        guard isRecording, !endTriggered else {
+            isCancelled = true
+            return
+        }
+        isCancelled = true
         endTriggered = true
 
         silenceTimer?.invalidate()
@@ -224,25 +274,22 @@ class SpeechService: NSObject, ObservableObject {
 
         isRecording = false
 
-        usleep(stopBufferMs)
-
-        recognitionTask?.finish()
+        recognitionTask?.cancel()
         recognitionTask = nil
 
-        let text = lastText.trimmingCharacters(in: .whitespacesAndNewlines)
-        print("Spoken: [DEBUG] stopAndFinish: finalText='\(text)'")
-
-        // 先重置 isStopping，再回调 onFinal
-        // 防止 onFinal 触发的异步回调链中 isStopping 仍为 true
-        isStopping = false
-        capturedOnFinal?(text)
+        print("Spoken: [DEBUG] recording cancelled")
     }
 
+    /// 用户手动停止录音（停止并返回当前识别结果，触发 onFinal）
     func stopRecording() {
         guard isRecording, !endTriggered else { return }
         let text = lastRecognizedText
         print("Spoken: [DEBUG] stopRecording: finalText='\(text)'")
         stopAndFinish(lastText: text)
+    }
+
+    var isCurrentlyCancelled: Bool {
+        return isCancelled
     }
 
     var isCurrentlyRecording: Bool {
