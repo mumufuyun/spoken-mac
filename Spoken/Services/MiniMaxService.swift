@@ -45,23 +45,23 @@ class MiniMaxService {
         case .direct:
             completion(.success(text))
         case .polish:
-            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+            callWithTimeout(timeout: aiTimeout, originalText: text, completion: completion) { cb in
                 self.polish(text: text, completion: cb)
             }
         case .prompt:
-            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+            callWithTimeout(timeout: aiTimeout, originalText: text, completion: completion) { cb in
                 self.toPrompt(text: text, completion: cb)
             }
         case .translate:
-            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+            callWithTimeout(timeout: aiTimeout, originalText: text, completion: completion) { cb in
                 self.translate(text: text, to: translateLang, completion: cb)
             }
         case .summarize:
-            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+            callWithTimeout(timeout: aiTimeout, originalText: text, completion: completion) { cb in
                 self.summarize(text: text, completion: cb)
             }
         case .format:
-            callWithTimeout(timeout: aiTimeout, originalText: text) { cb in
+            callWithTimeout(timeout: aiTimeout, originalText: text, completion: completion) { cb in
                 self.format(text: text, completion: cb)
             }
         }
@@ -71,35 +71,31 @@ class MiniMaxService {
     private func callWithTimeout(
         timeout: TimeInterval,
         originalText: String,
+        completion: @escaping (Result<String, Error>) -> Void,
         call: @escaping (@escaping (Result<String, Error>) -> Void) -> Void
     ) {
         var completed = false
 
         let timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-            guard let strongSelf = self else { return }
             guard !completed else { return }
             completed = true
-            strongSelf.currentTask?.cancel()
-            strongSelf.currentTask = nil
+            self?.currentTask?.cancel()
+            self?.currentTask = nil
             print("Spoken: [WARN] AI timeout (\(timeout)s), falling back to original text")
-            strongSelf.completionHandler?(.success(originalText))
+            completion(.success(originalText))
         }
 
         call { [weak self] result in
-            guard let strongSelf = self else { return }
             guard !completed else { return }
             timer.invalidate()
             completed = true
-            strongSelf.completionHandler?(result)
+            completion(result)
         }
     }
-
-    private var completionHandler: ((Result<String, Error>) -> Void)?
 
     func cancelCurrentTask() {
         currentTask?.cancel()
         currentTask = nil
-        completionHandler?(.failure(MiniMaxError.cancelled))
     }
 
     // MARK: - 润色
