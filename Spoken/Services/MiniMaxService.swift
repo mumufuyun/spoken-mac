@@ -75,14 +75,14 @@ class MiniMaxService {
     ) {
         var completed = false
 
-        let timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+            guard let strongSelf = self else { return }
             guard !completed else { return }
             completed = true
-            self.cancelCurrentTask()
-            print("Spoken: [WARN] AI timeout, falling back to original text")
-            DispatchQueue.main.async {
-                self.completionHandler?(.success(originalText))
-            }
+            strongSelf.currentTask?.cancel()
+            strongSelf.currentTask = nil
+            print("Spoken: [WARN] AI timeout (\(timeout)s), falling back to original text")
+            strongSelf.completionHandler?(.success(originalText))
         }
 
         call { [weak self] result in
@@ -100,7 +100,6 @@ class MiniMaxService {
         currentTask?.cancel()
         currentTask = nil
         completionHandler?(.failure(MiniMaxError.cancelled))
-        completionHandler = nil
     }
 
     // MARK: - 润色
