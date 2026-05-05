@@ -117,7 +117,10 @@ final class TextInjectionEngine: @unchecked Sendable {
         usleep(150_000)
 
         let hasFrontmostApp = NSWorkspace.shared.frontmostApplication != nil
-        let outcome: InjectionOutcome = hasFrontmostApp ? .inserted : .copiedToClipboard
+        // Check if Spoken itself is frontmost (would indicate injection may have failed)
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let isSpokenFrontmost = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
+        let outcome: InjectionOutcome = (hasFrontmostApp && !isSpokenFrontmost) ? .inserted : .copiedToClipboard
 
         if outcome == .inserted, let savedClipboard {
             pendingClipboardRestore = PendingClipboardRestore(

@@ -4,17 +4,20 @@ import Foundation
 class MiniMaxService {
     static let shared = MiniMaxService()
 
-    // API Key 从 Keychain 读取，首次运行需手动配置
-    // 配置方式：在终端运行 defaults write com.moss.Spoken MiniMaxAPIKey "your-api-key"
+    // API Key 从 Keychain 读取，fallback 到硬编码
     private var apiKey: String {
         if let key = SecureKeyStorage.shared.readAPIKey(), !key.isEmpty {
+            print("Spoken: [DEBUG] API Key: from Keychain (\(key.prefix(10))...)")
             return key
         }
-        if let key = UserDefaults.standard.string(forKey: "MiniMaxAPIKey"), !key.isEmpty {
-            SecureKeyStorage.shared.saveAPIKey(key)
-            UserDefaults.standard.removeObject(forKey: "MiniMaxAPIKey")
-            return key
+        // 临时回退：硬编码 Key（待后续替换为用户配置界面）
+        let hardcodedKey = "sk-cp-Feg_2DXayfN4ChLCbLTk3LvnnJRslowaGwb4grRbyTHNnjS4fJ-SvNRLRw2G62imJUoKVJG55blkhjnQ7V6o9Q1f-el5TfR5WDQj9q6l_LhyEsY16h0vB_E"
+        if !hardcodedKey.isEmpty {
+            SecureKeyStorage.shared.saveAPIKey(hardcodedKey)
+            print("Spoken: [DEBUG] API Key: from hardcoded (\(hardcodedKey.prefix(10))...)")
+            return hardcodedKey
         }
+        print("Spoken: [ERROR] API Key: EMPTY")
         return ""
     }
     private let baseURL = "https://api.minimax.chat/v1"
@@ -285,7 +288,13 @@ class MiniMaxService {
         }
 
         let task = URLSession.shared.dataTask(with: request) { rawData, response, error in
+            // 记录 HTTP 状态码
+            if let httpResponse = response as? HTTPURLResponse {
+                print("Spoken: [DEBUG] HTTP status: \(httpResponse.statusCode)")
+            }
+            
             if let error = error {
+                print("Spoken: [ERROR] Network error: \(error.localizedDescription) (code: \(error._code))")
                 // 用户取消
                 if (error as NSError).code == NSURLErrorCancelled {
                     completion(.failure(MiniMaxError.cancelled))
@@ -293,6 +302,7 @@ class MiniMaxService {
                 }
                 // 超时或网络错误时重试一次
                 if retryCount < 1 {
+                    print("Spoken: [DEBUG] Retrying... (attempt \(retryCount + 1))")
                     DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
                         self.executeChat(model: model, prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
                     }
@@ -302,24 +312,28 @@ class MiniMaxService {
                 return
             }
             guard let data = rawData else {
+                print("Spoken: [ERROR] No data returned")
                 completion(.failure(MiniMaxError.noData))
                 return
             }
 
             if let debugStr = String(data: data, encoding: .utf8) {
-                print("MiniMax raw: \(debugStr.prefix(300))")
+                print("Spoken: [DEBUG] MiniMax raw response: \(debugStr.prefix(500))")
             }
 
             do {
                 guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    print("Spoken: [ERROR] JSON parse failed")
                     completion(.failure(MiniMaxError.parseError))
                     return
                 }
 
                 if let code = json["status_code"] as? Int, code != 0 {
                     let msg = json["status_msg"] as? String ?? "Unknown error"
+                    print("Spoken: [ERROR] API error: code=\(code), msg=\(msg)")
                     // API 错误时重试一次
                     if retryCount < 1 {
+                        print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
                             self.executeChat(model: model, prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
                         }
@@ -333,6 +347,7 @@ class MiniMaxService {
                    let first = choices.first,
                    let messages = first["messages"] as? [[String: Any]],
                    let text = messages.first?["text"] as? String {
+                    print("Spoken: [DEBUG] Parse success via messages[].text path")
                     completion(.success(text.trimmingCharacters(in: .whitespacesAndNewlines)))
                     return
                 }
@@ -341,17 +356,23 @@ class MiniMaxService {
                    let first = choices.first,
                    let message = first["message"] as? [String: Any],
                    let text = message["content"] as? String {
+                    print("Spoken: [DEBUG] Parse success via message.content path")
                     completion(.success(text.trimmingCharacters(in: .whitespacesAndNewlines)))
                     return
                 }
 
                 if let output = json["output"] as? String {
+                    print("Spoken: [DEBUG] Parse success via output path")
                     completion(.success(output.trimmingCharacters(in: .whitespacesAndNewlines)))
                     return
                 }
 
+                // 记录 JSON 的顶层 key 方便调试
+                let keys = json.keys.sorted()
+                print("Spoken: [ERROR] No matching parse path. Top-level keys: \(keys)")
                 completion(.failure(MiniMaxError.parseError))
             } catch {
+                print("Spoken: [ERROR] JSON deserialization error: \(error)")
                 completion(.failure(error))
             }
         }
