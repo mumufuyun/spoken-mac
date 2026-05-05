@@ -9,8 +9,11 @@ class HotKeyService {
 
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
+    private var escapeHotKeyRef: EventHotKeyRef?
+    private var escapeEventHandler: EventHandlerRef?
 
     var onTriggered: (() -> Void)?
+    var onEscape: (() -> Void)?
 
     struct HotKeyConfig {
         var option: Bool
@@ -89,13 +92,64 @@ class HotKeyService {
 
     func unregisterAll() {
         unregister()
+        unregisterEscape()
     }
 
     func registerOptionSpaceHotKey() {
         register()
     }
 
+    // MARK: - Escape 键
+
+    func registerEscape() {
+        // 事件类型：按下时触发
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                       eventKind: UInt32(kEventHotKeyPressed))
+
+        // 安装事件处理器
+        let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
+            guard let userData = userData else { return OSStatus(eventNotHandledErr) }
+            let service = Unmanaged<HotKeyService>.fromOpaque(userData).takeUnretainedValue()
+            NSLog("Spoken: [DEBUG] Escape triggered")
+            service.onEscape?()
+            return noErr
+        }
+
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let handlerInstalled = InstallEventHandler(GetApplicationEventTarget(),
+                            handler,
+                            1,
+                            &eventType,
+                            selfPtr,
+                            &escapeEventHandler)
+        NSLog("Spoken: [DEBUG] Escape event handler installed: %d", handlerInstalled)
+
+        // 注册 Escape 键 (keyCode: 0x35)
+        let hotKeyID = EventHotKeyID(signature: OSType(0x45534350), // "ESCP"
+                                      id: 2)
+
+        let result = RegisterEventHotKey(0x35,
+                            UInt32(0),
+                            hotKeyID,
+                            GetApplicationEventTarget(),
+                            0,
+                            &escapeHotKeyRef)
+        NSLog("Spoken: [DEBUG] Escape hotkey registered with result: %d", result)
+    }
+
+    func unregisterEscape() {
+        if let hotKeyRef = escapeHotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.escapeHotKeyRef = nil
+        }
+        if let eventHandler = escapeEventHandler {
+            RemoveEventHandler(eventHandler)
+            self.escapeEventHandler = nil
+        }
+    }
+
     deinit {
         unregister()
+        unregisterEscape()
     }
 }

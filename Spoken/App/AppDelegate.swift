@@ -174,6 +174,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         viewModel.onCancel = { [weak self] in
             guard let strongSelf = self else { return }
+            strongSelf.hotKeyService.unregisterEscape()
             strongSelf.stateManager.transition(to: .idle)
             // 显示已取消 1.0 秒后关闭
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -183,6 +184,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         viewModel.onClose = { [weak self] in
+            self?.hotKeyService.unregisterEscape()
             self?.recordingPanel?.orderOut(nil)
             self?.recordingPanel = nil
         }
@@ -247,6 +249,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.recordingViewModel = viewModel
         self.recordingPanel = panel
         panel.orderFront(nil)
+
+        // 注册 Escape 键监听
+        hotKeyService.onEscape = { [weak self] in
+            DispatchQueue.main.async {
+                guard let strongSelf = self else { return }
+                if strongSelf.recordingPanel?.isVisible == true {
+                    strongSelf.recordingViewModel.cancel()
+                }
+            }
+        }
+        hotKeyService.registerEscape()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             viewModel.startRecording()
@@ -347,10 +360,11 @@ class RecordingViewModel: ObservableObject {
         SpeechService.shared.startRecording(
             onPartial: { [weak self] text in
                 DispatchQueue.main.async {
-                    self?.partialText = text
-                    self?.lastRecognizedText = text
-                    self?.statusText = text.isEmpty ? "正在聆听..." : text
-                    self?.displayStatus = "录音"
+                    guard let self = self, self.isRecording else { return }
+                    self.partialText = text
+                    self.lastRecognizedText = text
+                    self.statusText = text.isEmpty ? "正在聆听..." : text
+                    self.displayStatus = "录音"
                 }
             },
             onFinal: { [weak self] text in
@@ -395,6 +409,7 @@ class RecordingViewModel: ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
+        isProcessing = true  // 立即设置处理中
         statusText = ""
         // 根据当前模式设置 displayStatus
         let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
