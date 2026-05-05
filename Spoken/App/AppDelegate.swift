@@ -322,6 +322,7 @@ class RecordingViewModel: ObservableObject {
     @Published var isProcessing = false
     @Published var partialText = ""
     @Published var statusText = "正在聆听..."
+    @Published var displayStatus = "录音"  // 右上角状态展示
     @Published var isCancelled = false
     private var frontmostApp: NSRunningApplication?
     private var lastRecognizedText = ""
@@ -338,6 +339,7 @@ class RecordingViewModel: ObservableObject {
         partialText = ""
         lastRecognizedText = ""
         statusText = "正在聆听..."
+        displayStatus = "录音"
         
         // 状态转换：starting -> recording
         stateManager.transition(to: .recording)
@@ -348,6 +350,7 @@ class RecordingViewModel: ObservableObject {
                     self?.partialText = text
                     self?.lastRecognizedText = text
                     self?.statusText = text.isEmpty ? "正在聆听..." : text
+                    self?.displayStatus = "录音"
                 }
             },
             onFinal: { [weak self] text in
@@ -355,7 +358,7 @@ class RecordingViewModel: ObservableObject {
                     self?.isRecording = false
                     self?.isProcessing = true
                     self?.partialText = ""
-                    self?.statusText = "正在识别..."
+                    self?.statusText = ""
                     // 状态转换：recording -> finishing
                     self?.stateManager.transition(to: .finishing)
                     self?.processAndInput(text.isEmpty ? (self?.lastRecognizedText ?? "") : text)
@@ -398,7 +401,7 @@ class RecordingViewModel: ObservableObject {
         
         guard !text.isEmpty else {
             print("Spoken: [WARN] processAndInput: empty text received")
-            statusText = "未识别到内容"
+            displayStatus = "输入"
             isProcessing = false
             stateManager.transition(to: .idle)
             return
@@ -413,17 +416,14 @@ class RecordingViewModel: ObservableObject {
 
         if mode == .direct {
             print("Spoken: [DEBUG] Direct mode, skipping AI processing")
-            statusText = "已完成"
+            displayStatus = "输入"
             isProcessing = false
             onComplete?(text, frontmostApp)
             return
         }
 
         print("Spoken: [DEBUG] Starting AI processing: \(mode.rawValue)")
-        statusText = mode == .polish ? "润色中..." :
-                     mode == .prompt ? "生成 Prompt..." :
-                     mode == .translate ? "翻译中..." :
-                     mode == .summarize ? "摘要中..." : "格式化中..."
+        displayStatus = mode.rawValue  // 直接显示模式名：润色/翻译/摘要...
         isProcessing = true
 
         MiniMaxService.shared.process(
@@ -449,14 +449,15 @@ class RecordingViewModel: ObservableObject {
                         print("Spoken: [DEBUG] AI processing succeeded, output length: \(output.count)")
                         finalText = output
                     }
-                    strongSelf.statusText = "\(mode.rawValue)完成"
                     
                 case .failure(let error):
                     print("Spoken: [ERROR] AI processing failed: \(error.localizedDescription)")
                     print("Spoken: [DEBUG] Falling back to original text (length: \(text.count))")
                     finalText = text
-                    strongSelf.statusText = "AI 处理失败，使用原文"
                 }
+                
+                // 进入输入阶段（绿色）
+                strongSelf.displayStatus = "输入"
                 
                 print("Spoken: [DEBUG] Calling onComplete with text length: \(finalText.count)")
                 strongSelf.onComplete?(finalText, strongSelf.frontmostApp)
@@ -499,7 +500,7 @@ struct RecordingPanelView: View {
 
                 Spacer()
 
-                // 录音指示 - ElevenLabs 风格圆点
+                // 状态指示 - 录音(红) / 模式(黄) / 输入(绿)
                 if viewModel.isRecording {
                     HStack(spacing: 5) {
                         Circle()
@@ -510,7 +511,7 @@ struct RecordingPanelView: View {
                                 .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
                                 value: pulseScale
                             )
-                        Text("录音中")
+                        Text(viewModel.displayStatus)
                             .font(.system(size: 11, weight: .medium))
                             .tracking(0.14)
                             .foregroundColor(Color(hex: "#c0392b"))
@@ -528,7 +529,7 @@ struct RecordingPanelView: View {
                                 .easeInOut(duration: 1.2).repeatForever(autoreverses: true),
                                 value: pulseScale
                             )
-                        Text(viewModel.statusText)
+                        Text(viewModel.displayStatus)
                             .font(.system(size: 11, weight: .medium))
                             .tracking(0.14)
                             .foregroundColor(Color(hex: "#f39c12"))
@@ -536,15 +537,23 @@ struct RecordingPanelView: View {
                     .onAppear {
                         withAnimation { pulseScale = 1.2 }
                     }
-                } else if viewModel.statusText.contains("完成") || viewModel.statusText.contains("✓") {
+                } else if viewModel.displayStatus == "输入" {
                     HStack(spacing: 5) {
                         Circle()
                             .fill(Color(hex: "#27ae60"))
                             .frame(width: 6, height: 6)
-                        Text("已完成")
+                            .scaleEffect(pulseScale)
+                            .animation(
+                                .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                                value: pulseScale
+                            )
+                        Text(viewModel.displayStatus)
                             .font(.system(size: 11, weight: .medium))
                             .tracking(0.14)
                             .foregroundColor(Color(hex: "#27ae60"))
+                    }
+                    .onAppear {
+                        withAnimation { pulseScale = 1.2 }
                     }
                 }
             }
@@ -584,12 +593,12 @@ struct RecordingPanelView: View {
                         .font(.system(size: 11, weight: .regular))
                         .tracking(0.14)
                         .foregroundColor(textMuted)
-                } else if viewModel.isProcessing {
+                } else if viewModel.isRecording {
                     HStack(spacing: 10) {
-                        Text("AI 处理中...")
+                        Text("再次按 ⌥+空格 结束")
                             .font(.system(size: 11, weight: .regular))
                             .tracking(0.14)
-                            .foregroundColor(Color(hex: "#f39c12"))
+                            .foregroundColor(textMuted)
                         Spacer()
                         Button("取消") {
                             viewModel.cancel()
@@ -602,12 +611,9 @@ struct RecordingPanelView: View {
                         .cornerRadius(6)
                         .buttonStyle(.plain)
                     }
-                } else if viewModel.isRecording {
+                } else if viewModel.isProcessing || viewModel.displayStatus == "输入" {
+                    // AI 处理或输入阶段，显示取消按钮
                     HStack(spacing: 10) {
-                        Text("再次按 ⌥+空格 结束")
-                            .font(.system(size: 11, weight: .regular))
-                            .tracking(0.14)
-                            .foregroundColor(textMuted)
                         Spacer()
                         Button("取消") {
                             viewModel.cancel()
@@ -629,7 +635,7 @@ struct RecordingPanelView: View {
                 }
 
                 // 关闭按钮（非活跃状态时显示）
-                if !viewModel.isRecording && !viewModel.isProcessing && !viewModel.isCancelled {
+                if !viewModel.isRecording && !viewModel.isProcessing && !viewModel.isCancelled && viewModel.displayStatus != "输入" {
                     Button(action: { viewModel.onClose?() }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 18))
