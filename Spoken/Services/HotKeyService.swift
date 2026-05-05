@@ -8,9 +8,8 @@ class HotKeyService {
     static let shared = HotKeyService()
 
     private var hotKeyRef: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
     private var escapeHotKeyRef: EventHotKeyRef?
-    private var escapeEventHandler: EventHandlerRef?
+    private var eventHandler: EventHandlerRef?
 
     var onTriggered: (() -> Void)?
     var onEscape: (() -> Void)?
@@ -25,24 +24,47 @@ class HotKeyService {
 
     init() {}
 
-    // MARK: - 注册快捷键
+    // MARK: - 注册所有快捷键
 
-    func register(config: HotKeyConfig? = nil) {
+    func registerAll(config: HotKeyConfig? = nil) {
         if let config = config {
             currentConfig = config
         }
 
-        // 事件类型：按下时触发
+        // 只安装一个统一的事件处理器
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                        eventKind: UInt32(kEventHotKeyPressed))
 
-        // 安装事件处理器
         let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
             guard let userData = userData else { return OSStatus(eventNotHandledErr) }
+
+            // 获取 hotKeyID 以区分不同的快捷键
+            var hotKeyID = EventHotKeyID()
+            let status = GetEventParameter(
+                event,
+                EventParamName(kEventParamDirectObject),
+                EventParamType(typeEventHotKeyID),
+                nil,
+                MemoryLayout<EventHotKeyID>.size,
+                nil,
+                &hotKeyID
+            )
+
+            guard status == noErr else { return OSStatus(eventNotHandledErr) }
+
             let service = Unmanaged<HotKeyService>.fromOpaque(userData).takeUnretainedValue()
-            NSLog("Spoken: [DEBUG] HotKey triggered")
-            
-            service.onTriggered?()
+
+            switch hotKeyID.id {
+            case 1: // ⌥+空格
+                NSLog("Spoken: [DEBUG] HotKey triggered")
+                service.onTriggered?()
+            case 2: // Escape
+                NSLog("Spoken: [DEBUG] Escape triggered")
+                service.onEscape?()
+            default:
+                return OSStatus(eventNotHandledErr)
+            }
+
             return noErr
         }
 
@@ -53,22 +75,30 @@ class HotKeyService {
                             &eventType,
                             selfPtr,
                             &eventHandler)
-        NSLog("Spoken: [DEBUG] Event handler installed: %d", handlerInstalled)
+        NSLog("Spoken: [DEBUG] Unified event handler installed: %d", handlerInstalled)
 
-        // 注册快捷键：⌥ + 空格（默认）
+        // 注册 ⌥+空格
         let modifiers: UInt32 = computeModifiers()
-        let keyCode: UInt32 = currentConfig.space ? 0x31 : 0x31  // 空格
+        let keyCode: UInt32 = currentConfig.space ? 0x31 : 0x31
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x534D4F53), // "SMOS"
-                                      id: 1)
-
-        let result = RegisterEventHotKey(keyCode,
+        let hotKeyID1 = EventHotKeyID(signature: OSType(0x534D4F53), id: 1)
+        let result1 = RegisterEventHotKey(keyCode,
                             modifiers,
-                            hotKeyID,
+                            hotKeyID1,
                             GetApplicationEventTarget(),
                             0,
                             &hotKeyRef)
-        NSLog("Spoken: [DEBUG] HotKey registered with result: %d", result)
+        NSLog("Spoken: [DEBUG] HotKey registered with result: %d", result1)
+
+        // 注册 Escape 键
+        let hotKeyID2 = EventHotKeyID(signature: OSType(0x45534350), id: 2)
+        let result2 = RegisterEventHotKey(0x35,
+                            UInt32(0),
+                            hotKeyID2,
+                            GetApplicationEventTarget(),
+                            0,
+                            &escapeHotKeyRef)
+        NSLog("Spoken: [DEBUG] Escape hotkey registered with result: %d", result2)
     }
 
     private func computeModifiers() -> UInt32 {
@@ -79,10 +109,14 @@ class HotKeyService {
         return modifiers
     }
 
-    func unregister() {
+    func unregisterAll() {
         if let hotKeyRef = hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
+        }
+        if let escapeHotKeyRef = escapeHotKeyRef {
+            UnregisterEventHotKey(escapeHotKeyRef)
+            self.escapeHotKeyRef = nil
         }
         if let eventHandler = eventHandler {
             RemoveEventHandler(eventHandler)
@@ -90,66 +124,7 @@ class HotKeyService {
         }
     }
 
-    func unregisterAll() {
-        unregister()
-        unregisterEscape()
-    }
-
-    func registerOptionSpaceHotKey() {
-        register()
-    }
-
-    // MARK: - Escape 键
-
-    func registerEscape() {
-        // 事件类型：按下时触发
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                       eventKind: UInt32(kEventHotKeyPressed))
-
-        // 安装事件处理器
-        let handler: EventHandlerUPP = { _, event, userData -> OSStatus in
-            guard let userData = userData else { return OSStatus(eventNotHandledErr) }
-            let service = Unmanaged<HotKeyService>.fromOpaque(userData).takeUnretainedValue()
-            NSLog("Spoken: [DEBUG] Escape triggered")
-            service.onEscape?()
-            return noErr
-        }
-
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let handlerInstalled = InstallEventHandler(GetApplicationEventTarget(),
-                            handler,
-                            1,
-                            &eventType,
-                            selfPtr,
-                            &escapeEventHandler)
-        NSLog("Spoken: [DEBUG] Escape event handler installed: %d", handlerInstalled)
-
-        // 注册 Escape 键 (keyCode: 0x35)
-        let hotKeyID = EventHotKeyID(signature: OSType(0x45534350), // "ESCP"
-                                      id: 2)
-
-        let result = RegisterEventHotKey(0x35,
-                            UInt32(0),
-                            hotKeyID,
-                            GetApplicationEventTarget(),
-                            0,
-                            &escapeHotKeyRef)
-        NSLog("Spoken: [DEBUG] Escape hotkey registered with result: %d", result)
-    }
-
-    func unregisterEscape() {
-        if let hotKeyRef = escapeHotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.escapeHotKeyRef = nil
-        }
-        if let eventHandler = escapeEventHandler {
-            RemoveEventHandler(eventHandler)
-            self.escapeEventHandler = nil
-        }
-    }
-
     deinit {
-        unregister()
-        unregisterEscape()
+        unregisterAll()
     }
 }
