@@ -9,17 +9,13 @@ class SpeechService: NSObject, ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var isRecording = false
-    private var silenceTimer: Timer?
-    private var lastSpeechTime = Date()
     private var endTriggered = false
     private var lastRecognizedText = ""
     private var audioReceived = false
-    private var timeoutTimer: Timer?
 
     private var capturedOnPartial: ((String) -> Void)?
     private var capturedOnFinal: ((String) -> Void)?
 
-    private let silenceThreshold: TimeInterval = 3.0
     private let stopBufferMs: UInt32 = 200_000
 
     private override init() {
@@ -80,16 +76,6 @@ class SpeechService: NSObject, ObservableObject {
     func startRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
         guard !isRecording else { return }
 
-        // 30 秒超时：超时后自动停止并返回当前识别结果
-        timeoutTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { [weak self] _ in
-            guard let self = self, self.isRecording, !self.isCancelled else { return }
-            print("Spoken: [WARN] Recording timeout at 30s, stopping with current text")
-            let text = self.lastRecognizedText
-            self.cancelRecording()
-            self.capturedOnPartial?("")
-            onFinal(text)
-        }
-
         installTapAndStart(onPartial: onPartial, onFinal: onFinal, retryCount: 0)
     }
 
@@ -98,10 +84,6 @@ class SpeechService: NSObject, ObservableObject {
             print("Spoken: [ERROR] Failed to start recording after 3 retries")
             return
         }
-        
-        // 清理上次状态（必须在最前面，防止旧定时器干扰新录音）
-        silenceTimer?.invalidate()
-        silenceTimer = nil
         
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -114,7 +96,6 @@ class SpeechService: NSObject, ObservableObject {
         isRecording = true
         endTriggered = false
         lastRecognizedText = ""
-        lastSpeechTime = Date()
         capturedOnPartial = onPartial
         capturedOnFinal = onFinal
 
@@ -132,7 +113,6 @@ class SpeechService: NSObject, ObservableObject {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: speechFormat) { [weak self] buffer, _ in
             guard let self = self, self.isRecording else { return }
             recognitionRequest.append(buffer)
-            self.lastSpeechTime = Date()
             self.audioReceived = true
         }
 
@@ -198,21 +178,6 @@ class SpeechService: NSObject, ObservableObject {
                 self.installTapAndStart(onPartial: onPartial, onFinal: onFinal, retryCount: retryCount + 1)
             }
         }
-
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.checkSilence()
-        }
-    }
-
-    // MARK: - 静音检测
-
-    private func checkSilence() {
-        guard isRecording else { return }
-        let silenceDuration = Date().timeIntervalSince(lastSpeechTime)
-        if silenceDuration > silenceThreshold {
-            print("Spoken: [DEBUG] silence threshold reached after \(silenceDuration)s")
-            stopAndFinish(lastText: lastRecognizedText)
-        }
     }
 
     private var isStopping = false
@@ -226,11 +191,6 @@ class SpeechService: NSObject, ObservableObject {
         guard !isStopping else { return }
         isStopping = true
         endTriggered = true
-
-        timeoutTimer?.invalidate()
-        timeoutTimer = nil
-        silenceTimer?.invalidate()
-        silenceTimer = nil
 
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning {
@@ -254,18 +214,12 @@ class SpeechService: NSObject, ObservableObject {
 
     /// 取消录音（用户主动取消），不触发 onFinal 回调
     func cancelRecording() {
-        timeoutTimer?.invalidate()
-        timeoutTimer = nil
-        
         guard isRecording, !endTriggered else {
             isCancelled = true
             return
         }
         isCancelled = true
         endTriggered = true
-
-        silenceTimer?.invalidate()
-        silenceTimer = nil
 
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning {
