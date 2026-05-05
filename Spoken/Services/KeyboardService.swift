@@ -10,20 +10,44 @@ class KeyboardService {
     private init() {}
 
     func typeText(_ text: String) -> Bool {
-        print("Spoken: [DEBUG] KeyboardService.typeText: \(text)")
-
-        // 直接使用剪贴板方式，完全照搬 type4me 的实现
-        print("Spoken: [DEBUG] Using clipboard method")
+        print("Spoken: [DEBUG] KeyboardService.typeText: length=\(text.count)")
+        
         let outcome = engine.inject(text)
-        print("Spoken: [DEBUG] Clipboard outcome: \(outcome)")
         let success = (outcome == .inserted)
-
-        // 延迟恢复剪贴板
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             self?.engine.finishClipboardRestore()
         }
-
-        print("Spoken: [DEBUG] Final success: \(success)")
+        
+        print("Spoken: [DEBUG] KeyboardService.typeText result: \(success)")
         return success
+    }
+    
+    /// 备用注入方式：通过粘贴板 + 模拟 Cmd+V
+    func typeTextViaPaste(_ text: String) -> Bool {
+        print("Spoken: [DEBUG] KeyboardService.typeTextViaPaste: length=\(text.count)")
+        
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        
+        let source = CGEventSource(stateID: .hidSystemState)
+        
+        // Cmd+V 按下
+        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true)
+        cmdDown?.flags = .maskCommand
+        
+        let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
+        vDown?.flags = .maskCommand
+        vDown?.post(tap: .cghidEventTap)
+        
+        let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+        vUp?.flags = .maskCommand
+        vUp?.post(tap: .cghidEventTap)
+        
+        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
+        cmdUp?.post(tap: .cghidEventTap)
+        
+        return true
     }
 }

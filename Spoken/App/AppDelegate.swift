@@ -192,69 +192,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let savedFrontmostApp = appFromViewModel ?? strongSelf.frontmostAppBeforeHotKey
             let textToInject = text
             
-            print("Spoken: [DEBUG] AppDelegate onComplete - text: \(textToInject)")
+            print("Spoken: [DEBUG] AppDelegate onComplete - text length: \(textToInject.count)")
             print("Spoken: [DEBUG] AppDelegate onComplete - saved frontmost app: \(savedFrontmostApp?.localizedName ?? "unknown")")
             
             // 状态转换：finishing -> injecting
             strongSelf.stateManager.transition(to: .injecting)
             
-            if let app = savedFrontmostApp {
-                print("Spoken: [DEBUG] will activate: \(app.localizedName ?? "unknown") (PID: \(app.processIdentifier))")
-                
-                // 激活目标应用
-                let activateResult = app.activate()
-                print("Spoken: [DEBUG] activate returned: \(activateResult)")
-                print("Spoken: [DEBUG] current frontmost after activate: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
-                
-                // 缩短等待时间，检测到应用在前台后立即注入
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    let frontmostNow = NSWorkspace.shared.frontmostApplication
-                    print("Spoken: [DEBUG] frontmost app before inject: \(frontmostNow?.localizedName ?? "none")")
-                    print("Spoken: [DEBUG] injecting text: \(textToInject)")
-                    let success = KeyboardService.shared.typeText(textToInject)
-                    print("Spoken: [DEBUG] injection success: \(success)")
-                    
-                    // 注入完成后显示完成状态，短暂停留后消失
-                    DispatchQueue.main.async {
-                        strongSelf.recordingViewModel.statusText = "已完成 ✓"
-                        strongSelf.recordingViewModel.isProcessing = false
-                        strongSelf.recordingViewModel.isRecording = false
-                    }
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        strongSelf.recordingPanel?.orderOut(nil)
-                        strongSelf.recordingPanel = nil
-                        strongSelf.stateManager.transition(to: .postProcessing)
-                        
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            strongSelf.stateManager.transition(to: .idle)
-                        }
-                    }
-                }
-            } else {
-                print("Spoken: [DEBUG] no saved app, injecting directly")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    let success = KeyboardService.shared.typeText(textToInject)
-                    print("Spoken: [DEBUG] injection success: \(success)")
-                    
-                    // 注入完成后显示完成状态，短暂停留后消失
-                    DispatchQueue.main.async {
-                        strongSelf.recordingViewModel.statusText = "已完成 ✓"
-                        strongSelf.recordingViewModel.isProcessing = false
-                        strongSelf.recordingViewModel.isRecording = false
-                    }
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        strongSelf.recordingPanel?.orderOut(nil)
-                        strongSelf.recordingPanel = nil
-                        strongSelf.stateManager.transition(to: .postProcessing)
-                        
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            strongSelf.stateManager.transition(to: .idle)
-                        }
-                    }
-                }
-            }
+            strongSelf.injectTextWithRetry(textToInject, targetApp: savedFrontmostApp, maxRetries: 3)
         }
 
         self.recordingViewModel = viewModel
@@ -267,6 +211,104 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
 
+
+    // MARK: - Text Injection
+
+    private func injectTextWithRetry(_ text: String, targetApp: NSRunningApplication?, maxRetries: Int) {
+        guard !text.isEmpty else {
+            print("Spoken: [ERROR] injectTextWithRetry: empty text")
+            completeInjection()
+            return
+        }
+        
+        performInjectAttempt(text, targetApp: targetApp, attempt: 0, maxRetries: maxRetries)
+    }
+    
+    private func performInjectAttempt(_ text: String, targetApp: NSRunningApplication?, attempt: Int, maxRetries: Int) {
+        print("Spoken: [DEBUG] Inject attempt \(attempt + 1)/\(maxRetries)")
+        
+        if let app = targetApp {
+            print("Spoken: [DEBUG] Activating: \(app.localizedName ?? "unknown") (PID: \(app.processIdentifier))")
+            let activateResult = app.activate(options: [.activateAllWindows])
+            print("Spoken: [DEBUG] Activate returned: \(activateResult)")
+            
+            // 动态等待应用就绪（最长1s）
+            let checkInterval: TimeInterval = 0.1
+            let maxWaitTime: TimeInterval = 1.0
+            var elapsed: TimeInterval = 0
+            
+            let checkTimer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] timer in
+                elapsed += checkInterval
+                let frontmostNow = NSWorkspace.shared.frontmostApplication
+                let isTargetFrontmost = frontmostNow?.processIdentifier == app.processIdentifier
+                
+                let msElapsed = Int(elapsed * 1000)
+                print("Spoken: [DEBUG] Wait \(msElapsed)ms - frontmost: \(frontmostNow?.localizedName ?? "none") - target ready: \(isTargetFrontmost)")
+                
+                if isTargetFrontmost || elapsed >= maxWaitTime {
+                    timer.invalidate()
+                    self?.performInjection(text, label: "Attempt \(attempt + 1)")
+                    
+                    // 如果失败且还有重试次数，继续重试
+                    if elapsed >= maxWaitTime && attempt < maxRetries - 1 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            self?.performInjectAttempt(text, targetApp: targetApp, attempt: attempt + 1, maxRetries: maxRetries)
+                        }
+                    } else {
+                        self?.completeInjection()
+                    }
+                }
+            }
+            
+            // 安全超时：防止定时器无限运行
+            DispatchQueue.main.asyncAfter(deadline: .now() + maxWaitTime + 0.5) {
+                if checkTimer.isValid {
+                    checkTimer.invalidate()
+                    self.performInjection(text, label: "Timeout fallback")
+                    self.completeInjection()
+                }
+            }
+            
+        } else {
+            print("Spoken: [DEBUG] No target app, injecting directly")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.performInjection(text, label: "Direct")
+                self.completeInjection()
+            }
+        }
+    }
+    
+    private func performInjection(_ text: String, label: String) {
+        print("Spoken: [DEBUG] \(label) - injecting text length: \(text.count)")
+        let success = KeyboardService.shared.typeText(text)
+        print("Spoken: [DEBUG] \(label) - injection success: \(success)")
+        
+        if !success {
+            print("Spoken: [WARN] \(label) - keyboard injection failed, trying clipboard fallback")
+            let pasteboardSuccess = KeyboardService.shared.typeTextViaPaste(text)
+            print("Spoken: [DEBUG] \(label) - pasteboard fallback success: \(pasteboardSuccess)")
+        }
+    }
+    
+    private func completeInjection() {
+        print("Spoken: [DEBUG] Completing injection")
+        
+        DispatchQueue.main.async {
+            self.recordingViewModel.statusText = "已完成 ✓"
+            self.recordingViewModel.isProcessing = false
+            self.recordingViewModel.isRecording = false
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.recordingPanel?.orderOut(nil)
+            self.recordingPanel = nil
+            self.stateManager.transition(to: .postProcessing)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.stateManager.transition(to: .idle)
+            }
+        }
+    }
 
     // MARK: - Permissions
 
@@ -407,7 +449,10 @@ class RecordingViewModel: ObservableObject {
     }
 
     private func processAndInput(_ text: String) {
+        print("Spoken: [DEBUG] processAndInput called with text length: \(text.count)")
+        
         guard !text.isEmpty else {
+            print("Spoken: [WARN] processAndInput: empty text received")
             statusText = "未识别到内容"
             isProcessing = false
             stateManager.transition(to: .idle)
@@ -419,15 +464,17 @@ class RecordingViewModel: ObservableObject {
         let translateLangRaw = UserDefaults.standard.string(forKey: "translateLang") ?? "英文"
         let translateLang = TranslateLanguage(rawValue: translateLangRaw) ?? .english
 
-        print("Spoken: [DEBUG] Process mode from UserDefaults: \(mode.rawValue), translateLang: \(translateLang.rawValue)")
+        print("Spoken: [DEBUG] Process mode: \(mode.rawValue), translateLang: \(translateLang.rawValue)")
 
         if mode == .direct {
+            print("Spoken: [DEBUG] Direct mode, skipping AI processing")
             statusText = "已完成"
             isProcessing = false
             onComplete?(text, frontmostApp)
             return
         }
 
+        print("Spoken: [DEBUG] Starting AI processing: \(mode.rawValue)")
         statusText = mode == .polish ? "润色中..." :
                      mode == .prompt ? "生成 Prompt..." :
                      mode == .translate ? "翻译中..." :
@@ -439,20 +486,35 @@ class RecordingViewModel: ObservableObject {
             mode: mode,
             translateLang: translateLang
         ) { [weak self] result in
+            guard let strongSelf = self else {
+                print("Spoken: [ERROR] processAndInput: self is nil in completion")
+                return
+            }
+            
             DispatchQueue.main.async {
-                self?.isProcessing = false
+                strongSelf.isProcessing = false
                 let finalText: String
+                
                 switch result {
                 case .success(let output):
-                    finalText = output.isEmpty ? text : output
-                    self?.statusText = "\(mode.rawValue)完成"
-                    print("Spoken: [DEBUG] AI processed text: \(finalText)")
+                    if output.isEmpty {
+                        print("Spoken: [DEBUG] AI returned empty output, using original text")
+                        finalText = text
+                    } else {
+                        print("Spoken: [DEBUG] AI processing succeeded, output length: \(output.count)")
+                        finalText = output
+                    }
+                    strongSelf.statusText = "\(mode.rawValue)完成"
+                    
                 case .failure(let error):
                     print("Spoken: [ERROR] AI processing failed: \(error.localizedDescription)")
+                    print("Spoken: [DEBUG] Falling back to original text (length: \(text.count))")
                     finalText = text
-                    self?.statusText = "AI 处理失败，使用原文"
+                    strongSelf.statusText = "AI 处理失败，使用原文"
                 }
-                self?.onComplete?(finalText, self?.frontmostApp)
+                
+                print("Spoken: [DEBUG] Calling onComplete with text length: \(finalText.count)")
+                strongSelf.onComplete?(finalText, strongSelf.frontmostApp)
             }
         }
     }
