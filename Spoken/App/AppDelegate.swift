@@ -359,6 +359,10 @@ class RecordingViewModel: ObservableObject {
                     self?.isProcessing = true
                     self?.partialText = ""
                     self?.statusText = ""
+                    // 根据当前模式设置 displayStatus
+                    let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
+                    let mode = SpokenMode(rawValue: modeRaw) ?? .direct
+                    self?.displayStatus = mode == .direct ? "输入" : mode.rawValue
                     // 状态转换：recording -> finishing
                     self?.stateManager.transition(to: .finishing)
                     self?.processAndInput(text.isEmpty ? (self?.lastRecognizedText ?? "") : text)
@@ -391,7 +395,11 @@ class RecordingViewModel: ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
-        statusText = "正在识别..."
+        statusText = ""
+        // 根据当前模式设置 displayStatus
+        let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
+        let mode = SpokenMode(rawValue: modeRaw) ?? .direct
+        displayStatus = mode == .direct ? "输入" : mode.rawValue
         stateManager.transition(to: .finishing)
         SpeechService.shared.stopRecording()
     }
