@@ -18,6 +18,9 @@
 		B8372AFE48FCAFB291241A9C /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E81D41BC1FDD9172B9D55D6 /* Color+Hex.swift */; };
 		C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */; };
 		D2B5F8C13E4A6D7F0B9E2A1C /* SecureKeyStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */; };
+		DDBCCCB4172846FE9663FF08 /* SpeechPostProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */; };
+00C9269B3E9B42FEAD7A0CA1 /* ObjCExceptionCatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */; };
+74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,17 +38,24 @@
 		EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
 		F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMaxService.swift; sourceTree = "<group>"; };
 		A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureKeyStorage.swift; sourceTree = "<group>"; };
+		68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechPostProcessor.swift; sourceTree = "<group>"; };
+B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
+4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptionCatcher.m; sourceTree = "<group>"; };
+1CC5ED6598304C359F6F90E6 /* Spoken-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Spoken-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		1B8A6F544698795D23DDDFE2 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */,
+				4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */,
 				876CF505EC5F976A23DF7E41 /* HotKeyService.swift */,
 				BB2856E4008DD751136C6955 /* KeyboardService.swift */,
 				F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */,
 				A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */,
 				EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */,
+				68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */,
 				B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */,
 			);
 			path = Services;
@@ -56,6 +66,7 @@
 			children = (
 				3955CA0E5F1D8B48FA0D5C76 /* AppDelegate.swift */,
 				6D34239B1DE4FD221AA22A2D /* main.swift */,
+				1CC5ED6598304C359F6F90E6 /* Spoken-Bridging-Header.h */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -185,6 +196,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */,
 				118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */,
 				B8372AFE48FCAFB291241A9C /* Color+Hex.swift in Sources */,
 				17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */,
@@ -193,6 +205,7 @@
 				C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */,
 				D2B5F8C13E4A6D7F0B9E2A1C /* SecureKeyStorage.swift in Sources */,
 				3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */,
+				DDBCCCB4172846FE9663FF08 /* SpeechPostProcessor.swift in Sources */,
 				8E780E11AB623869A3F7ACB2 /* TextInjectionEngine.swift in Sources */,
 				863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */,
 			);
@@ -273,6 +286,7 @@
 		059B53DFD7847CCC52EF3106 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				SWIFT_OBJC_BRIDGING_HEADER = "Spoken/Spoken-Bridging-Header.h";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Spoken/Spoken.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -357,6 +371,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.moss.spoken;
 				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "Spoken/Spoken-Bridging-Header.h";
 			};
 			name = Debug;
 		};

@@ -45,6 +45,23 @@ struct ContentView: View {
     private let accentBlue = Color(hex: "#4a90d9")
 
     var body: some View {
+        Group {
+            if showSettings {
+                SettingsView(isPresented: $showSettings)
+            } else {
+                mainView
+            }
+        }
+        .onChange(of: showSettings) { _, newValue in
+            NotificationCenter.default.post(
+                name: .spokenPopoverResize,
+                object: nil,
+                userInfo: ["showSettings": newValue]
+            )
+        }
+    }
+
+    private var mainView: some View {
         VStack(spacing: 0) {
             // 标题栏
             HStack {
@@ -148,9 +165,6 @@ struct ContentView: View {
                 translateLang = saved
             }
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView(isPresented: $showSettings)
-        }
     }
 }
 
@@ -191,7 +205,7 @@ struct ModeButton: View {
 // MARK: - Settings
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case apiKey
+    case modelConfig
     case polish
     case prompt
     case translate
@@ -202,7 +216,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     
     var title: String {
         switch self {
-        case .apiKey: return "API Key"
+        case .modelConfig: return "模型"
         case .polish: return "润色"
         case .prompt: return "Prompt"
         case .translate: return "翻译"
@@ -213,7 +227,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     
     var icon: String {
         switch self {
-        case .apiKey: return "key.fill"
+        case .modelConfig: return "cpu"
         case .polish: return "wand.and.stars"
         case .prompt: return "terminal"
         case .translate: return "globe"
@@ -229,80 +243,72 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .translate: return .translate
         case .summarize: return .summarize
         case .format: return .format
-        case .apiKey: return nil
+        case .modelConfig: return nil
         }
     }
 }
 
 struct SettingsView: View {
     @Binding var isPresented: Bool
-    @State private var selectedSection: SettingsSection = .apiKey
+    @State private var selectedSection: SettingsSection = .modelConfig
     @State private var apiKey: String = ""
     @State private var promptText: String = ""
     @State private var saved = false
     @State private var revertedToDefault = false
     
     private let textPrimary = Color(hex: "#000000")
-    private let textSecondary = Color(hex: "#4a4a4a")
+    private let textSecondary = Color(hex: "#4e4e4e")
     private let textMuted = Color(hex: "#777169")
+    private let warmStone = Color(hex: "#f5f2ef")
     
     var body: some View {
-        HStack(spacing: 0) {
-            // 左侧导航
-            VStack(spacing: 0) {
-                ForEach(SettingsSection.allCases) { section in
-                    Button(action: {
-                        selectedSection = section
-                        loadSectionData(section)
-                        saved = false
-                        revertedToDefault = false
-                    }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: section.icon)
-                                .font(.system(size: 14))
-                                .foregroundColor(selectedSection == section ? .white : textMuted)
-                            Text(section.title)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(selectedSection == section ? .white : textSecondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                    }
-                    .buttonStyle(.plain)
-                    .background(selectedSection == section ? Color(hex: "#4a90d9") : Color.clear)
-                }
+        VStack(spacing: 0) {
+            // 标题栏
+            HStack {
+                Text("设置")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(textPrimary)
                 Spacer()
+                Button(action: { isPresented = false }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(textMuted.opacity(0.6))
+                }
+                .buttonStyle(.plain)
             }
-            .frame(width: 130)
-            .background(Color(hex: "#f5f2ef"))
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
             
             Divider()
+                .padding(.horizontal, 20)
             
-            // 右侧内容区
-            VStack(spacing: 0) {
-                // 标题栏
-                HStack {
-                    Text("设置")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(textPrimary)
-                    Spacer()
-                    Button(action: { isPresented = false }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(textMuted.opacity(0.6))
+            // 分类切换按钮（pill 风格，对齐主应用）
+            VStack(spacing: 5) {
+                HStack(spacing: 5) {
+                    ForEach([SettingsSection.modelConfig, .polish, .prompt], id: \.self) { section in
+                        SettingsTabButton(section: section, current: $selectedSection)
                     }
-                    .buttonStyle(.plain)
                 }
-                .padding(16)
-                .padding(.bottom, 8)
-                
-                Divider()
-                    .padding(.horizontal, 16)
-                
-                // 内容
-                if selectedSection == .apiKey {
-                    APIKeySectionView(apiKey: $apiKey, saved: $saved)
+                HStack(spacing: 5) {
+                    ForEach([SettingsSection.translate, .summarize, .format], id: \.self) { section in
+                        SettingsTabButton(section: section, current: $selectedSection)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            
+            Divider()
+                .padding(.horizontal, 20)
+            
+            // 内容区域
+            ScrollView {
+                if selectedSection == .modelConfig {
+                    ModelConfigSectionView(apiKey: $apiKey, saved: $saved)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
                 } else {
                     PromptSectionView(
                         section: selectedSection,
@@ -310,22 +316,26 @@ struct SettingsView: View {
                         saved: $saved,
                         revertedToDefault: $revertedToDefault
                     )
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                 }
             }
-            .frame(minWidth: 380)
-            .padding(.top, 8)
         }
-        .frame(width: 510, height: 380)
+        .frame(width: 420, height: 460)
         .background(Color.white)
-        .cornerRadius(12)
         .onAppear {
             loadSectionData(selectedSection)
+        }
+        .onChange(of: selectedSection) { _, newSection in
+            loadSectionData(newSection)
+            saved = false
+            revertedToDefault = false
         }
     }
     
     private func loadSectionData(_ section: SettingsSection) {
         switch section {
-        case .apiKey:
+        case .modelConfig:
             apiKey = SecureKeyStorage.shared.readAPIKey() ?? ""
         case .polish, .prompt, .translate, .summarize, .format:
             if let mode = section.toSpokenMode {
@@ -347,58 +357,220 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - API Key 区域
+struct SettingsTabButton: View {
+    let section: SettingsSection
+    @Binding var current: SettingsSection
+    
+    private let warmStone = Color(hex: "#f5f2ef")
+    private let textPrimary = Color(hex: "#000000")
+    private let textSecondary = Color(hex: "#4e4e4e")
+    
+    var body: some View {
+        Button(action: {
+            current = section
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 10))
+                Text(section.title)
+                    .font(.system(size: 11, weight: current == section ? .semibold : .regular))
+            }
+            .foregroundColor(current == section ? .white : textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(current == section ? textPrimary : warmStone)
+            .cornerRadius(9999)
+            .shadow(
+                color: Color(hex: "#4e3220").opacity(current == section ? 0.12 : 0),
+                radius: 3, x: 0, y: 1
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
 
-struct APIKeySectionView: View {
+// MARK: - 模型配置区域
+
+struct ModelConfigSectionView: View {
     @Binding var apiKey: String
     @Binding var saved: Bool
     
+    @State private var selectedPreset: String = ""
+    @State private var baseURL: String = ""
+    @State private var modelName: String = ""
+    
     private let textPrimary = Color(hex: "#000000")
+    private let textMuted = Color(hex: "#777169")
     
     var body: some View {
-        VStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("MiniMax API Key")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(textPrimary)
-                Text("用于调用 AI 处理服务，Key 会安全存储在系统 Keychain 中")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(hex: "#999999"))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            
-            TextField("请输入 MiniMax API Key", text: $apiKey)
-                .textFieldStyle(.roundedBorder)
-            
-            if saved {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 12))
-                    Text("已保存")
-                        .font(.system(size: 12))
+        ScrollView {
+            VStack(spacing: 16) {
+                // 提供商预设
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("模型提供商")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(textPrimary)
+                    Text("选择预设配置，或选择「自定义」手动填写")
+                        .font(.system(size: 11))
+                        .foregroundColor(textMuted)
                 }
-                .foregroundColor(Color.green)
-            }
-            
-            HStack(spacing: 12) {
-                Spacer()
-                Button("保存") {
-                    SecureKeyStorage.shared.saveAPIKey(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                    saved = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        saved = false
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                // 预设选择器
+                FlowLayout(spacing: 8) {
+                    ForEach(MiniMaxService.presets, id: \.name) { preset in
+                        Button(action: {
+                            selectPreset(preset)
+                        }) {
+                            Text(preset.displayName)
+                                .font(.system(size: 11, weight: selectedPreset == preset.name ? .medium : .regular))
+                                .foregroundColor(selectedPreset == preset.name ? .white : textPrimary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(selectedPreset == preset.name ? Color(hex: "#4a90d9") : Color(hex: "#f5f2ef"))
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(Color(hex: "#4a90d9"))
-                .foregroundColor(.white)
-                .cornerRadius(8)
-                .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                // Base URL
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Base URL")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(textPrimary)
+                    TextField("https://api.example.com/v1", text: $baseURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                }
+                
+                // 模型名
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("模型名称")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(textPrimary)
+                    TextField("model-name", text: $modelName)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                }
+                
+                // API Key
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("API Key")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(textPrimary)
+                    TextField("sk-...", text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                }
+                
+                // 保存状态
+                if saved {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12))
+                        Text("已保存")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundColor(Color.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                
+                HStack(spacing: 12) {
+                    Spacer()
+                    Button("保存") {
+                        saveConfig()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(Color(hex: "#4a90d9"))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
             }
         }
-        .padding(20)
+        .onAppear {
+            loadCurrentConfig()
+        }
+    }
+    
+    private func selectPreset(_ preset: MiniMaxService.ProviderPreset) {
+        selectedPreset = preset.name
+        if preset.name != "custom" {
+            baseURL = preset.baseURL
+            modelName = preset.model
+        }
+    }
+    
+    private func loadCurrentConfig() {
+        let provider = UserDefaults.standard.string(forKey: "llm_provider") ?? MiniMaxService.presets[0].name
+        selectedPreset = provider
+        baseURL = UserDefaults.standard.string(forKey: "llm_base_url") ?? MiniMaxService.presets[0].baseURL
+        modelName = UserDefaults.standard.string(forKey: "llm_model") ?? MiniMaxService.presets[0].model
+        apiKey = SecureKeyStorage.shared.readAPIKey() ?? ""
+    }
+    
+    private func saveConfig() {
+        UserDefaults.standard.set(selectedPreset, forKey: "llm_provider")
+        UserDefaults.standard.set(baseURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "llm_base_url")
+        UserDefaults.standard.set(modelName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "llm_model")
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKey.isEmpty {
+            _ = SecureKeyStorage.shared.saveAPIKey(trimmedKey)
+        } else {
+            SecureKeyStorage.shared.deleteAPIKey()
+        }
+        saved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            saved = false
+        }
+    }
+}
+
+// MARK: - Flow Layout（流式布局，用于预设按钮换行）
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = FlowResult(in: proposal.width ?? 0, subviews: subviews, spacing: spacing)
+        return result.size
+    }
+    
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x,
+                                      y: bounds.minY + result.positions[index].y),
+                         proposal: .unspecified)
+        }
+    }
+    
+    struct FlowResult {
+        var size: CGSize = .zero
+        var positions: [CGPoint] = []
+        
+        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
+            var x: CGFloat = 0
+            var y: CGFloat = 0
+            var lineHeight: CGFloat = 0
+            
+            for subview in subviews {
+                let size = subview.sizeThatFits(.unspecified)
+                if x + size.width > maxWidth && x > 0 {
+                    x = 0
+                    y += lineHeight + spacing
+                    lineHeight = 0
+                }
+                positions.append(CGPoint(x: x, y: y))
+                lineHeight = max(lineHeight, size.height)
+                x += size.width + spacing
+            }
+            
+            self.size = CGSize(width: maxWidth, height: y + lineHeight)
+        }
     }
 }
 
@@ -432,14 +604,12 @@ struct PromptSectionView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
             .padding(.top, 8)
             
             Text("使用 {text} 作为内容占位符")
                 .font(.system(size: 10))
                 .foregroundColor(Color(hex: "#999999"))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
             
             TextEditor(text: $promptText)
                 .font(.system(size: 12, design: .monospaced))
@@ -447,7 +617,7 @@ struct PromptSectionView: View {
                 .padding(8)
                 .background(Color(hex: "#faf8f6"))
                 .cornerRadius(6)
-                .padding(.horizontal, 20)
+                .environment(\.colorScheme, .light)
             
             HStack(spacing: 12) {
                 Button("恢复默认") {
@@ -498,7 +668,6 @@ struct PromptSectionView: View {
                         .foregroundColor(Color(hex: "#4a90d9"))
                 }
             }
-            .padding(.horizontal, 20)
             .padding(.bottom, 8)
         }
     }

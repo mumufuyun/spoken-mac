@@ -1,26 +1,58 @@
 import Foundation
 
-/// MiniMax API 服务
+/// LLM API 服务（OpenAI 兼容格式）
+/// 支持 MiniMax、DeepSeek 及任意 OpenAI API 兼容的服务
 class MiniMaxService {
     static let shared = MiniMaxService()
 
-    // API Key 从 Keychain 读取，fallback 到硬编码
+    // MARK: - 预设配置
+
+    struct ProviderPreset {
+        let name: String
+        let displayName: String
+        let baseURL: String
+        let model: String
+    }
+
+    static let presets: [ProviderPreset] = [
+        ProviderPreset(name: "minimax_fast", displayName: "MiniMax 快速", baseURL: "https://api.minimax.chat/v1", model: "MiniMax-M2.5-HighSpeed"),
+        ProviderPreset(name: "minimax_quality", displayName: "MiniMax 质量", baseURL: "https://api.minimax.chat/v1", model: "MiniMax-M2.5"),
+        ProviderPreset(name: "deepseek", displayName: "DeepSeek", baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat"),
+        ProviderPreset(name: "custom", displayName: "自定义", baseURL: "", model: ""),
+    ]
+
+    // MARK: - 当前配置
+
+    /// 当前生效的 LLM 配置（Base URL + 模型名）
+    private var currentConfig: (baseURL: String, model: String) {
+        let savedProvider = UserDefaults.standard.string(forKey: "llm_provider")
+        let preset = Self.presets.first { $0.name == savedProvider }
+
+        let baseURL: String
+        let model: String
+
+        if let preset = preset, preset.name != "custom" {
+            // 使用预设值，但允许用户覆盖
+            baseURL = UserDefaults.standard.string(forKey: "llm_base_url") ?? preset.baseURL
+            model = UserDefaults.standard.string(forKey: "llm_model") ?? preset.model
+        } else {
+            // 自定义或首次使用：从 UserDefaults 读取，无值则回退到 MiniMax 快速
+            baseURL = UserDefaults.standard.string(forKey: "llm_base_url") ?? Self.presets[0].baseURL
+            model = UserDefaults.standard.string(forKey: "llm_model") ?? Self.presets[0].model
+        }
+
+        return (baseURL, model)
+    }
+
+    // API Key 从 Keychain 读取（兼容旧 account）
     private var apiKey: String {
         if let key = SecureKeyStorage.shared.readAPIKey(), !key.isEmpty {
             print("Spoken: [DEBUG] API Key: from Keychain (\(key.prefix(10))...)")
             return key
         }
-        // 临时回退：硬编码 Key（待后续替换为用户配置界面）
-        let hardcodedKey = "sk-cp-Feg_2DXayfN4ChLCbLTk3LvnnJRslowaGwb4grRbyTHNnjS4fJ-SvNRLRw2G62imJUoKVJG55blkhjnQ7V6o9Q1f-el5TfR5WDQj9q6l_LhyEsY16h0vB_E"
-        if !hardcodedKey.isEmpty {
-            SecureKeyStorage.shared.saveAPIKey(hardcodedKey)
-            print("Spoken: [DEBUG] API Key: from hardcoded (\(hardcodedKey.prefix(10))...)")
-            return hardcodedKey
-        }
         print("Spoken: [ERROR] API Key: EMPTY")
         return ""
     }
-    private let baseURL = "https://api.minimax.chat/v1"
 
     private var currentTask: URLSessionDataTask?
 
@@ -31,6 +63,17 @@ class MiniMaxService {
         请根据上下文语义，将明显是英文音译的中文还原为正确的英文单词。常见模式：技术术语（API、SDK、bug、debug、deploy、commit、PR、review）、产品名（iPhone、MacBook、GitHub、Docker）、日常英文（OK、Hi、email、PM、APP）。
         修正后保持自然的中英文混排方式，英文单词前后不额外加空格。
         """
+
+    /// 清理模型响应中的 <think>...</think> 推理标签
+    private static func cleanResponse(_ text: String) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 使用正则移除 <think>...</think> 及其内容（支持跨行、忽略大小写）
+        if let regex = try? NSRegularExpression(pattern: #"(?is)<think>.*?</think>"#, options: []) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private init() {}
 
@@ -217,7 +260,7 @@ class MiniMaxService {
             completion(.success(originalText))
         }
 
-        call { [weak self] result in
+        call { result in
             guard !completed else { return }
             timer.invalidate()
             completed = true
@@ -230,21 +273,17 @@ class MiniMaxService {
         currentTask = nil
     }
 
-    // MARK: - 润色
+    // MARK: - 各模式处理
 
     private func polish(text: String, completion: @escaping (Result<String, Error>) -> Void) {
         let prompt = getPrompt(for: .polish, text: text)
-        chat(model: "MiniMax-M2.5-HighSpeed", prompt: prompt, completion: completion)
+        chat(prompt: prompt, completion: completion)
     }
-
-    // MARK: - Prompt 生成
 
     private func toPrompt(text: String, completion: @escaping (Result<String, Error>) -> Void) {
         let prompt = getPrompt(for: .prompt, text: text)
-        chat(model: "MiniMax-M2.5-HighSpeed", prompt: prompt, completion: completion)
+        chat(prompt: prompt, completion: completion)
     }
-
-    // MARK: - 翻译
 
     private func translate(
         text: String,
@@ -258,42 +297,38 @@ class MiniMaxService {
         case .korean: langName = "韩文"
         }
         let prompt = getPrompt(for: .translate, text: text, langName: langName)
-        chat(model: "MiniMax-M2.5-HighSpeed", prompt: prompt, completion: completion)
+        chat(prompt: prompt, completion: completion)
     }
-
-    // MARK: - 摘要
 
     private func summarize(text: String, completion: @escaping (Result<String, Error>) -> Void) {
         let prompt = getPrompt(for: .summarize, text: text)
-        chat(model: "MiniMax-M2.5-HighSpeed", prompt: prompt, completion: completion)
+        chat(prompt: prompt, completion: completion)
     }
-
-    // MARK: - 格式化
 
     private func format(text: String, completion: @escaping (Result<String, Error>) -> Void) {
         let prompt = getPrompt(for: .format, text: text)
-        chat(model: "MiniMax-M2.5-HighSpeed", prompt: prompt, completion: completion)
+        chat(prompt: prompt, completion: completion)
     }
 
-    // MARK: - 核心请求
+    // MARK: - 核心请求（OpenAI 兼容格式）
 
     private func chat(
-        model: String,
         prompt: String,
         temperature: Double = 0.1,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        executeChat(model: model, prompt: prompt, temperature: temperature, retryCount: 0, completion: completion)
+        executeChat(prompt: prompt, temperature: temperature, retryCount: 0, completion: completion)
     }
 
     private func executeChat(
-        model: String,
         prompt: String,
         temperature: Double,
         retryCount: Int,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let url = URL(string: "\(baseURL)/text/chatcompletion_v2") else {
+        let config = currentConfig
+
+        guard let url = URL(string: "\(config.baseURL)/chat/completions") else {
             completion(.failure(MiniMaxError.invalidURL))
             return
         }
@@ -305,7 +340,7 @@ class MiniMaxService {
         request.timeoutInterval = 60
 
         let body: [String: Any] = [
-            "model": model,
+            "model": config.model,
             "messages": [["role": "user", "content": prompt]],
             "temperature": temperature
         ]
@@ -317,12 +352,14 @@ class MiniMaxService {
             return
         }
 
+        print("Spoken: [DEBUG] LLM request → \(config.baseURL) | model: \(config.model)")
+
         let task = URLSession.shared.dataTask(with: request) { rawData, response, error in
             // 记录 HTTP 状态码
             if let httpResponse = response as? HTTPURLResponse {
                 print("Spoken: [DEBUG] HTTP status: \(httpResponse.statusCode)")
             }
-            
+
             if let error = error {
                 print("Spoken: [ERROR] Network error: \(error.localizedDescription) (code: \(error._code))")
                 // 用户取消
@@ -334,7 +371,7 @@ class MiniMaxService {
                 if retryCount < 1 {
                     print("Spoken: [DEBUG] Retrying... (attempt \(retryCount + 1))")
                     DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-                        self.executeChat(model: model, prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
+                        self.executeChat(prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
                     }
                     return
                 }
@@ -348,7 +385,7 @@ class MiniMaxService {
             }
 
             if let debugStr = String(data: data, encoding: .utf8) {
-                print("Spoken: [DEBUG] MiniMax raw response: \(debugStr.prefix(500))")
+                print("Spoken: [DEBUG] LLM raw response: \(debugStr.prefix(500))")
             }
 
             do {
@@ -358,14 +395,29 @@ class MiniMaxService {
                     return
                 }
 
-                if let code = json["status_code"] as? Int, code != 0 {
-                    let msg = json["status_msg"] as? String ?? "Unknown error"
-                    print("Spoken: [ERROR] API error: code=\(code), msg=\(msg)")
-                    // API 错误时重试一次
+                // 检查错误响应
+                if let errorObj = json["error"] as? [String: Any],
+                   let errorMsg = errorObj["message"] as? String {
+                    print("Spoken: [ERROR] API error: \(errorMsg)")
                     if retryCount < 1 {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-                            self.executeChat(model: model, prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
+                            self.executeChat(prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
+                        }
+                        return
+                    }
+                    completion(.failure(MiniMaxError.apiError(code: 0, message: errorMsg)))
+                    return
+                }
+
+                // 兼容 MiniMax 原生错误格式
+                if let code = json["status_code"] as? Int, code != 0 {
+                    let msg = json["status_msg"] as? String ?? "Unknown error"
+                    print("Spoken: [ERROR] API error: code=\(code), msg=\(msg)")
+                    if retryCount < 1 {
+                        print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
+                        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
+                            self.executeChat(prompt: prompt, temperature: temperature, retryCount: retryCount + 1, completion: completion)
                         }
                         return
                     }
@@ -373,27 +425,30 @@ class MiniMaxService {
                     return
                 }
 
-                if let choices = json["choices"] as? [[String: Any]],
-                   let first = choices.first,
-                   let messages = first["messages"] as? [[String: Any]],
-                   let text = messages.first?["text"] as? String {
-                    print("Spoken: [DEBUG] Parse success via messages[].text path")
-                    completion(.success(text.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    return
-                }
-
+                // OpenAI 标准格式：choices[0].message.content
                 if let choices = json["choices"] as? [[String: Any]],
                    let first = choices.first,
                    let message = first["message"] as? [String: Any],
                    let text = message["content"] as? String {
-                    print("Spoken: [DEBUG] Parse success via message.content path")
-                    completion(.success(text.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    print("Spoken: [DEBUG] Parse success via OpenAI format (message.content)")
+                    completion(.success(Self.cleanResponse(text)))
                     return
                 }
 
+                // 兼容 MiniMax 原生格式：choices[0].messages[0].text
+                if let choices = json["choices"] as? [[String: Any]],
+                   let first = choices.first,
+                   let messages = first["messages"] as? [[String: Any]],
+                   let text = messages.first?["text"] as? String {
+                    print("Spoken: [DEBUG] Parse success via MiniMax native format (messages[].text)")
+                    completion(.success(Self.cleanResponse(text)))
+                    return
+                }
+
+                // 备用：output 字段
                 if let output = json["output"] as? String {
                     print("Spoken: [DEBUG] Parse success via output path")
-                    completion(.success(output.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    completion(.success(Self.cleanResponse(output)))
                     return
                 }
 

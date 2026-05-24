@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let spokenPopoverResize = Notification.Name("com.moss.Spoken.popoverResize")
+}
+
 enum AppState: String, CaseIterable {
     case idle
     case starting
@@ -12,38 +16,23 @@ enum AppState: String, CaseIterable {
 
 class StateManager: ObservableObject {
     static let shared = StateManager()
-    
+
     @Published var currentState: AppState = .idle
-    
+
     private init() {}
-    
+
     func transition(to newState: AppState) {
-        guard currentState != newState else {
-            print("Spoken: [DEBUG] Skipping duplicate state transition: \(newState.rawValue)")
-            return
-        }
-        guard !isBusy() || newState == .idle else {
-            print("Spoken: [DEBUG] Blocking transition during processing: \(currentState.rawValue) -> \(newState.rawValue)")
-            return
-        }
+        guard currentState != newState else { return }
         print("Spoken: [DEBUG] State transition: \(currentState.rawValue) -> \(newState.rawValue)")
         currentState = newState
     }
-    
-    private func isBusy() -> Bool {
-        return [.finishing, .injecting, .postProcessing].contains(currentState)
-    }
-    
+
     func isIdle() -> Bool {
         return currentState == .idle
     }
-    
-    func isRecording() -> Bool {
-        return currentState == .recording
-    }
-    
-    func isProcessing() -> Bool {
-        return [.starting, .finishing, .injecting, .postProcessing].contains(currentState)
+
+    func isBusy() -> Bool {
+        return currentState != .idle
     }
 }
 
@@ -89,6 +78,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentSize = NSSize(width: 260, height: 200)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: contentView)
+
+        NotificationCenter.default.addObserver(
+            forName: .spokenPopoverResize,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self else { return }
+            let showSettings = notification.userInfo?["showSettings"] as? Bool ?? false
+            let newSize = showSettings ? NSSize(width: 420, height: 460) : NSSize(width: 260, height: 200)
+            self.popover.contentSize = newSize
+            // 如果 popover 正在显示，需要调整位置以匹配新大小
+            if self.popover.isShown, let button = self.statusItem.button {
+                self.popover.performClose(nil)
+                self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            }
+        }
     }
 
     @objc private func togglePopover() {
@@ -127,33 +132,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if recordingPanel?.isVisible == true {
             if recordingViewModel.isRecording {
-                // 录音中 → 停止录音，继续 AI 处理
                 recordingViewModel.stopRecording()
             } else {
-                // 其他阶段 → 取消整个流程
                 recordingViewModel.cancel()
             }
             return
         }
         showRecordingPanel()
     }
-    
-    private func closeRecordingPanel() {
-        recordingViewModel.cancel()
-        recordingPanel?.orderOut(nil)
-        recordingPanel = nil
-    }
 
     // MARK: - Recording Panel
 
     private func showRecordingPanel() {
-        // 保存当前前台应用
         frontmostAppBeforeHotKey = NSWorkspace.shared.frontmostApplication
         print("Spoken: [DEBUG] AppDelegate frontmost app saved: \(frontmostAppBeforeHotKey?.localizedName ?? "unknown")")
-        
-        // 状态转换：idle -> starting
+
         stateManager.transition(to: .starting)
-        
+
         let viewModel = RecordingViewModel()
         let recordingView = RecordingPanelView(viewModel: viewModel)
         let hostingController = NSHostingController(rootView: recordingView)
@@ -171,7 +166,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentViewController = hostingController
 
-        // 底部居中
         if let screen = NSScreen.main {
             let visible = screen.visibleFrame
             panel.setFrameOrigin(NSPoint(
@@ -183,13 +177,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.onCancel = { [weak self] in
             guard let strongSelf = self else { return }
             strongSelf.stateManager.transition(to: .idle)
-            // 显示已取消 1.0 秒后关闭
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 strongSelf.recordingPanel?.orderOut(nil)
                 strongSelf.recordingPanel = nil
             }
         }
-        
+
         viewModel.onClose = { [weak self] in
             self?.recordingPanel?.orderOut(nil)
             self?.recordingPanel = nil
@@ -197,59 +190,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         viewModel.onComplete = { [weak self] text, appFromViewModel in
             guard let strongSelf = self else { return }
-            let savedFrontmostApp = appFromViewModel ?? strongSelf.frontmostAppBeforeHotKey
-            let textToInject = text
-            
-            print("Spoken: [DEBUG] onComplete - text length: \(textToInject.count)")
-            print("Spoken: [DEBUG] target app: \(savedFrontmostApp?.localizedName ?? "unknown")")
-            
-            // 状态转换：finishing -> injecting
-            strongSelf.stateManager.transition(to: .injecting)
-            
-            // 关键：先隐藏 recordingPanel，避免干扰目标应用焦点
-            strongSelf.recordingPanel?.orderOut(nil)
-            
-            // 激活目标应用
-            if let app = savedFrontmostApp {
-                print("Spoken: [DEBUG] Activating: \(app.localizedName ?? "unknown")")
-                app.activate(options: [.activateAllWindows])
-            } else {
-                print("Spoken: [WARN] No target app found")
-            }
-            
-            // 等待 0.5s 确保目标应用和输入框就绪
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                print("Spoken: [DEBUG] frontmost app before inject: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
-                
-                let success = KeyboardService.shared.typeText(textToInject)
-                print("Spoken: [DEBUG] injection success: \(success)")
-                
-                if !success {
-                    print("Spoken: [WARN] Keyboard injection failed, copying to clipboard as fallback")
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(textToInject, forType: .string)
-                    print("Spoken: [DEBUG] text copied to clipboard")
-                }
-                
-                // 更新 UI 状态
-                DispatchQueue.main.async {
-                    strongSelf.recordingViewModel.statusText = "已完成 ✓"
-                    strongSelf.recordingViewModel.isProcessing = false
-                    strongSelf.recordingViewModel.isRecording = false
-                }
-                
-                // 延迟关闭 panel
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    strongSelf.recordingPanel?.orderOut(nil)
-                    strongSelf.recordingPanel = nil
-                    strongSelf.stateManager.transition(to: .postProcessing)
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        strongSelf.stateManager.transition(to: .idle)
-                    }
-                }
-            }
+            let targetApp = appFromViewModel ?? strongSelf.frontmostAppBeforeHotKey
+            strongSelf.performTextInjection(text: text, targetApp: targetApp)
         }
 
         self.recordingViewModel = viewModel
@@ -261,7 +203,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Text Injection
 
+    private func performTextInjection(text: String, targetApp: NSRunningApplication?) {
+        print("Spoken: [DEBUG] performTextInjection - text length: \(text.count)")
+        stateManager.transition(to: .injecting)
+
+        recordingPanel?.orderOut(nil)
+
+        if let app = targetApp {
+            print("Spoken: [DEBUG] Activating: \(app.localizedName ?? "unknown")")
+            app.activate(options: [.activateAllWindows])
+        } else {
+            print("Spoken: [WARN] No target app found")
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.executeInjection(text: text)
+        }
+    }
+
+    private func executeInjection(text: String) {
+        print("Spoken: [DEBUG] frontmost app before inject: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+
+        let success = KeyboardService.shared.typeText(text)
+        print("Spoken: [DEBUG] injection success: \(success)")
+
+        if !success {
+            print("Spoken: [WARN] Keyboard injection failed, copying to clipboard as fallback")
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+        }
+
+        cleanupAfterInjection()
+    }
+
+    private func cleanupAfterInjection() {
+        recordingPanel?.orderOut(nil)
+        recordingPanel = nil
+        stateManager.transition(to: .idle)
+    }
 
     // MARK: - Permissions
 
@@ -269,7 +251,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SpeechService.shared.requestPermissions { micGranted, speechGranted in
             let accessibilityGranted = AXIsProcessTrusted()
             print("Spoken: [DEBUG] AXIsProcessTrusted at startup: \(accessibilityGranted)")
-            
+
             if !micGranted || !speechGranted {
                 DispatchQueue.main.async {
                     self.showPermissionAlert()
@@ -330,7 +312,7 @@ class RecordingViewModel: ObservableObject {
     @Published var isProcessing = false
     @Published var partialText = ""
     @Published var statusText = "正在聆听..."
-    @Published var displayStatus = "录音"  // 右上角状态展示
+    @Published var displayStatus = "录音"
     @Published var isCancelled = false
     private var frontmostApp: NSRunningApplication?
     private var lastRecognizedText = ""
@@ -348,78 +330,87 @@ class RecordingViewModel: ObservableObject {
         lastRecognizedText = ""
         statusText = "正在聆听..."
         displayStatus = "录音"
-        
-        // 状态转换：starting -> recording
+
         stateManager.transition(to: .recording)
 
-        SpeechService.shared.startRecording(
+        let started = SpeechService.shared.startRecording(
             onPartial: { [weak self] text in
                 DispatchQueue.main.async {
                     guard let self = self, self.isRecording else { return }
                     self.partialText = text
                     self.lastRecognizedText = text
                     self.statusText = text.isEmpty ? "正在聆听..." : text
-                    self.displayStatus = "录音"
                 }
             },
             onFinal: { [weak self] text in
                 DispatchQueue.main.async {
-                    self?.isRecording = false
-                    self?.isProcessing = true
-                    self?.partialText = ""
-                    self?.statusText = ""
-                    // 根据当前模式设置 displayStatus
+                    guard let strongSelf = self else { return }
+                    strongSelf.isRecording = false
+                    strongSelf.partialText = ""
+
                     let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
                     let mode = SpokenMode(rawValue: modeRaw) ?? .direct
-                    self?.displayStatus = mode == .direct ? "输入" : mode.rawValue
-                    // 状态转换：recording -> finishing
-                    self?.stateManager.transition(to: .finishing)
-                    self?.processAndInput(text.isEmpty ? (self?.lastRecognizedText ?? "") : text)
+
+                    if mode == .direct {
+                        strongSelf.isProcessing = false
+                        strongSelf.statusText = ""
+                    } else {
+                        strongSelf.isProcessing = true
+                        strongSelf.displayStatus = mode.rawValue
+                        strongSelf.statusText = ""
+                    }
+
+                    strongSelf.stateManager.transition(to: .finishing)
+                    strongSelf.processAndInput(text.isEmpty ? strongSelf.lastRecognizedText : text)
                 }
             }
         )
+
+        if !started {
+            isRecording = false
+            statusText = "录音启动失败，请重试"
+            stateManager.transition(to: .idle)
+        }
     }
 
-    /// 取消整个流程（录音中/AI处理中均可取消）
     func cancel() {
         if isCancelled { return }
         isCancelled = true
 
-        // 1. 取消录音
         SpeechService.shared.cancelRecording()
-
-        // 2. 取消 AI 网络请求
         MiniMaxService.shared.cancelCurrentTask()
 
-        // 3. 更新 UI
         statusText = "已取消"
         isRecording = false
         isProcessing = false
 
-        // 4. 回调
         onCancel?()
     }
 
-    /// 停止录音（用户再次按快捷键），继续 AI 处理流程
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
-        isProcessing = true  // 立即设置处理中
         statusText = ""
-        // 根据当前模式设置 displayStatus
+
         let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
         let mode = SpokenMode(rawValue: modeRaw) ?? .direct
-        displayStatus = mode == .direct ? "输入" : mode.rawValue
+
+        if mode == .direct {
+            isProcessing = false
+        } else {
+            isProcessing = true
+            displayStatus = mode.rawValue
+        }
+
         stateManager.transition(to: .finishing)
         SpeechService.shared.stopRecording()
     }
 
     private func processAndInput(_ text: String) {
         print("Spoken: [DEBUG] processAndInput called with text length: \(text.count)")
-        
+
         guard !text.isEmpty else {
             print("Spoken: [WARN] processAndInput: empty text received")
-            displayStatus = "输入"
             isProcessing = false
             stateManager.transition(to: .idle)
             return
@@ -434,14 +425,12 @@ class RecordingViewModel: ObservableObject {
 
         if mode == .direct {
             print("Spoken: [DEBUG] Direct mode, skipping AI processing")
-            displayStatus = "输入"
             isProcessing = false
             onComplete?(text, frontmostApp)
             return
         }
 
         print("Spoken: [DEBUG] Starting AI processing: \(mode.rawValue)")
-        displayStatus = mode.rawValue  // 直接显示模式名：润色/翻译/摘要...
         isProcessing = true
 
         MiniMaxService.shared.process(
@@ -453,11 +442,11 @@ class RecordingViewModel: ObservableObject {
                 print("Spoken: [ERROR] processAndInput: self is nil in completion")
                 return
             }
-            
+
             DispatchQueue.main.async {
                 strongSelf.isProcessing = false
                 let finalText: String
-                
+
                 switch result {
                 case .success(let output):
                     if output.isEmpty {
@@ -467,16 +456,13 @@ class RecordingViewModel: ObservableObject {
                         print("Spoken: [DEBUG] AI processing succeeded, output length: \(output.count)")
                         finalText = output
                     }
-                    
+
                 case .failure(let error):
                     print("Spoken: [ERROR] AI processing failed: \(error.localizedDescription)")
                     print("Spoken: [DEBUG] Falling back to original text (length: \(text.count))")
                     finalText = text
                 }
-                
-                // 进入输入阶段（绿色）
-                strongSelf.displayStatus = "输入"
-                
+
                 print("Spoken: [DEBUG] Calling onComplete with text length: \(finalText.count)")
                 strongSelf.onComplete?(finalText, strongSelf.frontmostApp)
             }
@@ -490,9 +476,7 @@ struct RecordingPanelView: View {
     @ObservedObject var viewModel: RecordingViewModel
     @State private var pulseScale: CGFloat = 1.0
 
-    // ElevenLabs Warm Palette
     private let bgPrimary = Color(hex: "#ffffff")
-    private let warmStone = Color(hex: "#f5f2ef")
     private let textPrimary = Color(hex: "#000000")
     private let textSecondary = Color(hex: "#4e4e4e")
     private let textMuted = Color(hex: "#777169")
@@ -500,7 +484,6 @@ struct RecordingPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部标题栏
             HStack {
                 Text("Spoken")
                     .font(.system(size: 12, weight: .semibold))
@@ -518,7 +501,6 @@ struct RecordingPanelView: View {
 
                 Spacer()
 
-                // 状态指示 - 录音(红) / 模式(黄) / 输入(绿)
                 if viewModel.isRecording {
                     HStack(spacing: 5) {
                         Circle()
@@ -529,12 +511,13 @@ struct RecordingPanelView: View {
                                 .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
                                 value: pulseScale
                             )
-                        Text(viewModel.displayStatus)
+                        Text("录音")
                             .font(.system(size: 11, weight: .medium))
                             .tracking(0.14)
                             .foregroundColor(Color(hex: "#c0392b"))
                     }
                     .onAppear {
+                        pulseScale = 1.0
                         withAnimation { pulseScale = 1.3 }
                     }
                 } else if viewModel.isProcessing {
@@ -553,24 +536,7 @@ struct RecordingPanelView: View {
                             .foregroundColor(Color(hex: "#f39c12"))
                     }
                     .onAppear {
-                        withAnimation { pulseScale = 1.2 }
-                    }
-                } else if viewModel.displayStatus == "输入" {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: "#27ae60"))
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(pulseScale)
-                            .animation(
-                                .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
-                                value: pulseScale
-                            )
-                        Text(viewModel.displayStatus)
-                            .font(.system(size: 11, weight: .medium))
-                            .tracking(0.14)
-                            .foregroundColor(Color(hex: "#27ae60"))
-                    }
-                    .onAppear {
+                        pulseScale = 1.0
                         withAnimation { pulseScale = 1.2 }
                     }
                 }
@@ -580,17 +546,14 @@ struct RecordingPanelView: View {
 
             Spacer().frame(height: 12)
 
-            // 波形动画 - ElevenLabs 暖色调
             WaveformView(
                 isRecording: viewModel.isRecording,
-                isProcessing: viewModel.isProcessing,
-                partialText: viewModel.partialText
+                isProcessing: viewModel.isProcessing
             )
             .frame(height: 48)
 
             Spacer().frame(height: 14)
 
-            // 识别文本
             Text(viewModel.statusText)
                 .font(.system(size: 15, weight: .regular))
                 .tracking(0.16)
@@ -604,7 +567,6 @@ struct RecordingPanelView: View {
 
             Spacer().frame(height: 14)
 
-            // 底部提示与操作区
             HStack {
                 if viewModel.isCancelled {
                     Text("已取消")
@@ -629,8 +591,7 @@ struct RecordingPanelView: View {
                         .cornerRadius(6)
                         .buttonStyle(.plain)
                     }
-                } else if viewModel.isProcessing || viewModel.displayStatus == "输入" {
-                    // AI 处理或输入阶段，显示取消按钮
+                } else if viewModel.isProcessing {
                     HStack(spacing: 10) {
                         Spacer()
                         Button("取消") {
@@ -645,21 +606,7 @@ struct RecordingPanelView: View {
                         .buttonStyle(.plain)
                     }
                 } else {
-                    Text("按 ⌥+空格 开始录音")
-                        .font(.system(size: 11, weight: .regular))
-                        .tracking(0.14)
-                        .foregroundColor(textMuted)
                     Spacer()
-                }
-
-                // 关闭按钮（非活跃状态时显示）
-                if !viewModel.isRecording && !viewModel.isProcessing && !viewModel.isCancelled && viewModel.displayStatus != "输入" {
-                    Button(action: { viewModel.onClose?() }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(textMuted.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20)
@@ -675,12 +622,11 @@ struct RecordingPanelView: View {
     }
 }
 
-// MARK: - 波形动画视图
+// MARK: - WaveformView
 
 struct WaveformView: View {
     let isRecording: Bool
     let isProcessing: Bool
-    let partialText: String
 
     @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 24)
     @State private var timer: Timer?
