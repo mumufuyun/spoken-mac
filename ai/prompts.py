@@ -2,17 +2,24 @@
 spoken/ai/prompts.py
 AI 润色层 System Prompt 模板。
 
-包含五套模板：
+包含六套模板：
 - Mode B：文字润色（口语 -> 书面）
 - Mode C：转 Prompt（口语描述 -> 结构化 AI 指令）
 - Mode D：翻译英文（默认译为自然英文）
-- Mode E：摘要总结（输出一小段精炼摘要）
-- Mode F：结构化纪要（主题/事项/待办/时间）
+- Mode E：会议纪要（结构化会议记录）
+- Mode F：内容结构化整理（主题/要点/逻辑梳理）
 
 支持用户在 config.toml 中覆盖默认模板。
+
+V3 变更：
+- 移除重复的摘要模式（原 MODE_E_DEFAULT 摘要版），Mode E 统一为会议纪要
+- 新增 get_mode_description() 供 UI 展示模式说明
+- 新增 list_supported_modes() 返回支持的模式列表
 """
 
 from __future__ import annotations
+
+from typing import Dict, List
 
 # ─────────────────────────────────────────────────────────────
 # 公共 ASR 校正上下文段
@@ -113,30 +120,8 @@ MODE_D_DEFAULT = f"""你是一个专业翻译助手。
 
 
 # ─────────────────────────────────────────────────────────────
-# Mode E：摘要总结
-# 目标：将转录文本压缩为一小段精炼摘要
-# ─────────────────────────────────────────────────────────────
-MODE_E_DEFAULT = f"""你是一个摘要助手。
-
-你的任务是将用户的语音转录结果压缩成精炼摘要。
-
-重要背景：{_ASR_CONTEXT_BRIEF}
-不要把 ASR 识别错误当作原始信息写入摘要。
-
-规则：
-1. 提炼核心信息，去掉重复、寒暄、口头禅和枝节
-2. 信息优先级：结论 > 行动方向 > 关键数据 > 背景上下文 > 细节
-3. 确保摘要中的专有名词、技术术语、人名准确
-4. 尽量精炼，但不要以丢失关键信息为代价压缩
-5. 保持原始语气和立场，不凭空扩展
-6. 如果原文很短且已经足够精炼，可仅做轻微整理
-7. 只输出摘要正文，不加标题、不加解释
-"""
-
-
-# ─────────────────────────────────────────────────────────────
-# Mode E：会议纪要
-# 目标：将会议录音整理为专业的会议纪要
+# Mode E：会议纪要（V3 升级：从摘要模式升级为专用会议纪要模式）
+# 目标：将会议录音整理为专业的结构化会议纪要
 # ─────────────────────────────────────────────────────────────
 MODE_E_DEFAULT = f"""你是一个专业的会议纪要助手。
 
@@ -177,7 +162,7 @@ MODE_E_DEFAULT = f"""你是一个专业的会议纪要助手。
 
 
 # ─────────────────────────────────────────────────────────────
-# Mode F：内容结构化整理
+# Mode F：内容结构化整理（V3 新增）
 # 目标：将杂乱内容整理成清晰的结构化形式
 # ─────────────────────────────────────────────────────────────
 MODE_F_DEFAULT = f"""你是一个内容整理助手。
@@ -207,8 +192,48 @@ MODE_F_DEFAULT = f"""你是一个内容整理助手。
 """
 
 
-def get_system_prompt(mode: str, custom_prompt: str = "") -> str:
+# ─────────────────────────────────────────────────────────────
+# 模式元数据（V3 新增）
+# ─────────────────────────────────────────────────────────────
+_MODE_METADATA: Dict[str, Dict[str, str]] = {
+    "A": {
+        "name": "直接输出",
+        "description": "直接输出识别文字，无 AI 处理",
+        "icon": "⚡",
+    },
+    "B": {
+        "name": "AI 润色",
+        "description": "将口语转录修正为流畅的书面文字",
+        "icon": "✨",
+    },
+    "C": {
+        "name": "转 Prompt",
+        "description": "将口语描述转化为可直接使用的 AI 指令",
+        "icon": "📝",
+    },
+    "D": {
+        "name": "翻译英文",
+        "description": "将中文语音准确翻译为自然英文",
+        "icon": "🌐",
+    },
+    "E": {
+        "name": "会议纪要",
+        "description": "将会议录音整理为结构化会议纪要",
+        "icon": "📋",
+    },
+    "F": {
+        "name": "结构化整理",
+        "description": "将杂乱内容整理为清晰的结构化形式",
+        "icon": "📊",
+    },
+}
 
+
+# ─────────────────────────────────────────────────────────────
+# 公共接口
+# ─────────────────────────────────────────────────────────────
+
+def get_system_prompt(mode: str, custom_prompt: str = "") -> str:
     """获取指定模式的 System Prompt。
 
     优先使用用户自定义 prompt，若未设置则使用内置默认值。
@@ -238,3 +263,60 @@ def get_system_prompt(mode: str, custom_prompt: str = "") -> str:
         "F": MODE_F_DEFAULT,
     }
     return defaults[mode]
+
+
+def get_mode_description(mode: str) -> str:
+    """获取模式的用户可读描述。
+
+    Args:
+        mode: "A" / "B" / "C" / "D" / "E" / "F"
+
+    Returns:
+        模式描述字符串，未知模式返回空字符串
+    """
+    meta = _MODE_METADATA.get(mode, {})
+    return meta.get("description", "")
+
+
+def get_mode_name(mode: str) -> str:
+    """获取模式的显示名称。
+
+    Args:
+        mode: "A" / "B" / "C" / "D" / "E" / "F"
+
+    Returns:
+        模式名称字符串，未知模式返回模式 ID
+    """
+    meta = _MODE_METADATA.get(mode, {})
+    return meta.get("name", mode)
+
+
+def get_mode_icon(mode: str) -> str:
+    """获取模式的图标 emoji。
+
+    Args:
+        mode: "A" / "B" / "C" / "D" / "E" / "F"
+
+    Returns:
+        图标字符串，未知模式返回空字符串
+    """
+    meta = _MODE_METADATA.get(mode, {})
+    return meta.get("icon", "")
+
+
+def list_supported_modes() -> List[str]:
+    """返回所有支持的模式 ID 列表（有序）。
+
+    Returns:
+        ["A", "B", "C", "D", "E", "F"]
+    """
+    return list(_MODE_METADATA.keys())
+
+
+def get_all_mode_metadata() -> Dict[str, Dict[str, str]]:
+    """返回所有模式的元数据字典（只读副本）。
+
+    Returns:
+        {mode_id: {"name": ..., "description": ..., "icon": ...}, ...}
+    """
+    return {k: dict(v) for k, v in _MODE_METADATA.items()}

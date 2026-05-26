@@ -394,6 +394,72 @@ class ASRManager:
             except Exception as e:
                 logger.warning("发布事件 '%s' 失败: %s", event_name, e)
 
+    # ── 健康检查与统计（V3 新增）────────────────────────────────
+
+    def health_check(self) -> dict:
+        """执行健康检查，返回引擎状态报告。
+
+        Returns:
+            {
+                "state": str,            # 当前状态
+                "current_engine": str,   # 当前引擎名
+                "is_running": bool,      # 是否在识别中
+                "recording_duration": float,  # 当前录音时长（秒）
+                "engines": {             # 各引擎状态
+                    "name": {
+                        "loaded": bool,
+                        "is_primary": bool,
+                        "load_error": str or None,
+                    }
+                }
+            }
+        """
+        with self._lock:
+            engines_info = {}
+            for name, entry in self._engines.items():
+                engines_info[name] = {
+                    "loaded": getattr(entry.engine, "is_loaded", False),
+                    "is_primary": entry.is_primary,
+                    "load_error": entry.load_error,
+                }
+
+            return {
+                "state": self._state,
+                "current_engine": self._current.name if self._current else "",
+                "is_running": self._is_running,
+                "recording_duration": self.get_recording_duration(),
+                "long_audio_threshold": self._long_audio_threshold,
+                "is_long_audio": self.is_long_audio(),
+                "engines": engines_info,
+            }
+
+    def reset_to_primary(self) -> bool:
+        """尝试重置回主引擎（如主引擎恢复可用）。
+
+        Returns:
+            True 表示成功切换到主引擎
+        """
+        with self._lock:
+            candidates = self._ordered_candidates()
+            if not candidates:
+                return False
+            primary = candidates[0]
+            if self._current and self._current.name == primary.name:
+                return True  # 已经是主引擎
+
+        logger.info("尝试重置到主引擎: %s", primary.name)
+        try:
+            primary.engine.load()
+            with self._lock:
+                self._current = primary
+                self._state = "ready"
+            logger.info("[OK] 已重置到主引擎: %s", primary.name)
+            self._emit("asr_engine_reset", {"engine": primary.name})
+            return True
+        except Exception as e:
+            logger.warning("重置到主引擎失败: %s", e)
+            return False
+
     def __repr__(self) -> str:
         with self._lock:
             engines = list(self._engines.keys())
