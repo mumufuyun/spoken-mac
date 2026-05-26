@@ -24,8 +24,8 @@ project_root = os.path.dirname(os.path.abspath(SPECPATH))
 
 # 数据文件：配置、提示音、图标等
 datas = [
-    # 默认配置文件
-    (os.path.join(project_root, "spoken", "config", "defaults.toml"), "spoken/config"),
+    # 默认配置文件（打包后位于 _MEIPASS/spoken/config/defaults.toml）
+    (os.path.join(project_root, "config", "defaults.toml"), "spoken/config"),
 ]
 
 # 隐藏导入：动态导入的模块
@@ -130,17 +130,14 @@ icon_path = os.path.join(os.path.abspath(SPECPATH), "spoken.ico")
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # onedir 模式：binaries/datas 由 COLLECT 单独放
     name="Spoken",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,  # 发布版无控制台窗口，日志写入文件
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -148,4 +145,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=icon_path if os.path.exists(icon_path) else None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="Spoken",  # 输出目录：dist/Spoken/
 )

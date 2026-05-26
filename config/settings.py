@@ -34,8 +34,26 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# 默认配置文件路径（与本模块同目录）
-_DEFAULTS_PATH = Path(__file__).parent / "defaults.toml"
+# 默认配置文件路径
+# 打包后（PyInstaller onefile/onedir）用 sys._MEIPASS 定位；
+# 开发态用 __file__ 同级目录
+def _resolve_defaults_path() -> Path:
+    """解析 defaults.toml 的实际路径，兼容打包和开发两种环境。"""
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        # PyInstaller 打包环境：datas 解压到 _MEIPASS/spoken/config/
+        candidate = Path(meipass) / "spoken" / "config" / "defaults.toml"
+        if candidate.exists():
+            return candidate
+        # 兼容旧 spec 配置，datas 可能直接在 _MEIPASS/config/
+        candidate2 = Path(meipass) / "config" / "defaults.toml"
+        if candidate2.exists():
+            return candidate2
+    # 开发态：与本模块同目录
+    return Path(__file__).parent / "defaults.toml"
+
+_DEFAULTS_PATH = _resolve_defaults_path()
 
 
 def _expand_env(value: str) -> str:
