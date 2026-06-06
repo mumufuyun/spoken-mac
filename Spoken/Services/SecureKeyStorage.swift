@@ -8,10 +8,11 @@ class SecureKeyStorage {
     private let service = "com.moss.Spoken"
     private let legacyAccount = "minimax_api_key"
     private let account = "llm_api_key"
+    private let speechAccount = "speech_api_key"
     
     private init() {}
     
-    /// 读取 API Key（先读新 account，兼容旧 account）
+    /// 读取 LLM API Key（先读新 account，兼容旧 account）
     func readAPIKey() -> String? {
         // 先尝试读取新的 account
         if let key = readKey(forAccount: account), !key.isEmpty {
@@ -22,6 +23,11 @@ class SecureKeyStorage {
             return key
         }
         return nil
+    }
+    
+    /// 读取语音识别 API Key
+    func readSpeechAPIKey() -> String? {
+        return readKey(forAccount: speechAccount)
     }
     
     private func readKey(forAccount acc: String) -> String? {
@@ -45,26 +51,32 @@ class SecureKeyStorage {
         return key
     }
     
-    /// 保存 API Key（保存到新 account，空值时删除）
+    /// 保存 LLM API Key（保存到新 account，空值时删除）
     func saveAPIKey(_ key: String) -> Bool {
-        // 先删除新 account 的旧数据
+        return saveKey(key, forAccount: account)
+    }
+    
+    /// 保存语音识别 API Key
+    func saveSpeechAPIKey(_ key: String) -> Bool {
+        return saveKey(key, forAccount: speechAccount)
+    }
+    
+    private func saveKey(_ key: String, forAccount acc: String) -> Bool {
         let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: acc
         ]
         SecItemDelete(deleteQuery as CFDictionary)
         
-        // 空值不保存，直接返回成功（已删除）
         guard !key.isEmpty, let data = key.data(using: .utf8) else {
             return true
         }
         
-        // 添加新的
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: acc,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
@@ -73,7 +85,7 @@ class SecureKeyStorage {
         return status == errSecSuccess
     }
     
-    /// 删除 API Key（同时删除新旧 account）
+    /// 删除 LLM API Key（同时删除新旧 account）
     func deleteAPIKey() {
         for acc in [account, legacyAccount] {
             let query: [String: Any] = [

@@ -206,17 +206,19 @@ struct ModeButton: View {
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case modelConfig
+    case speechConfig
     case polish
     case prompt
     case translate
     case summarize
     case format
-    
+
     var id: Self { self }
-    
+
     var title: String {
         switch self {
         case .modelConfig: return "模型"
+        case .speechConfig: return "语音"
         case .polish: return "润色"
         case .prompt: return "Prompt"
         case .translate: return "翻译"
@@ -224,10 +226,11 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .format: return "格式化"
         }
     }
-    
+
     var icon: String {
         switch self {
         case .modelConfig: return "cpu"
+        case .speechConfig: return "waveform"
         case .polish: return "wand.and.stars"
         case .prompt: return "terminal"
         case .translate: return "globe"
@@ -235,7 +238,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .format: return "list.bullet"
         }
     }
-    
+
     var toSpokenMode: SpokenMode? {
         switch self {
         case .polish: return .polish
@@ -243,7 +246,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .translate: return .translate
         case .summarize: return .summarize
         case .format: return .format
-        case .modelConfig: return nil
+        case .modelConfig, .speechConfig: return nil
         }
     }
 }
@@ -286,12 +289,12 @@ struct SettingsView: View {
             // 分类切换按钮（pill 风格，对齐主应用）
             VStack(spacing: 5) {
                 HStack(spacing: 5) {
-                    ForEach([SettingsSection.modelConfig, .polish, .prompt], id: \.self) { section in
+                    ForEach([SettingsSection.modelConfig, .speechConfig, .polish], id: \.self) { section in
                         SettingsTabButton(section: section, current: $selectedSection)
                     }
                 }
                 HStack(spacing: 5) {
-                    ForEach([SettingsSection.translate, .summarize, .format], id: \.self) { section in
+                    ForEach([SettingsSection.prompt, .translate, .summarize, .format], id: \.self) { section in
                         SettingsTabButton(section: section, current: $selectedSection)
                     }
                 }
@@ -299,14 +302,18 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)
-            
+
             Divider()
                 .padding(.horizontal, 20)
-            
+
             // 内容区域
             ScrollView {
                 if selectedSection == .modelConfig {
                     ModelConfigSectionView(apiKey: $apiKey, saved: $saved)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                } else if selectedSection == .speechConfig {
+                    SpeechConfigSectionView()
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)
                 } else {
@@ -337,6 +344,8 @@ struct SettingsView: View {
         switch section {
         case .modelConfig:
             apiKey = SecureKeyStorage.shared.readAPIKey() ?? ""
+        case .speechConfig:
+            break
         case .polish, .prompt, .translate, .summarize, .format:
             if let mode = section.toSpokenMode {
                 let custom = UserDefaults.standard.string(forKey: mode.promptUserDefaultsKey)
@@ -443,6 +452,9 @@ struct ModelConfigSectionView: View {
                     TextField("https://api.example.com/v1", text: $baseURL)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
+                        .onChange(of: baseURL) { _ in
+                            saveCurrentPresetConfig()
+                        }
                 }
                 
                 // 模型名
@@ -453,6 +465,9 @@ struct ModelConfigSectionView: View {
                     TextField("model-name", text: $modelName)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
+                        .onChange(of: modelName) { _ in
+                            saveCurrentPresetConfig()
+                        }
                 }
                 
                 // API Key
@@ -497,31 +512,91 @@ struct ModelConfigSectionView: View {
     }
     
     private func selectPreset(_ preset: MiniMaxService.ProviderPreset) {
+        // 切换前先保存当前配置
+        saveCurrentPresetConfig()
+
         selectedPreset = preset.name
-        if preset.name != "custom" {
-            baseURL = preset.baseURL
-            modelName = preset.model
+        if preset.name == "custom" {
+            // 切到自定义时，恢复之前保存的自定义配置
+            baseURL = UserDefaults.standard.string(forKey: "llm_custom_base_url") ?? ""
+            modelName = UserDefaults.standard.string(forKey: "llm_custom_model") ?? ""
+        } else {
+            // 切到预设时，读取该预设的独立配置
+            let configKey = "llm_config_\(preset.name)"
+            if let savedConfig = UserDefaults.standard.dictionary(forKey: configKey) as? [String: String] {
+                baseURL = savedConfig["baseURL"] ?? preset.baseURL
+                modelName = savedConfig["model"] ?? preset.model
+            } else {
+                baseURL = preset.baseURL
+                modelName = preset.model
+            }
         }
+
+        // 切换后立即保存新预设的默认配置，确保后续修改有地方存
+        saveCurrentPresetConfig()
     }
-    
+
+    private func saveCurrentPresetConfig() {
+        // 保存当前预设的配置到独立的 key
+        let configKey = "llm_config_\(selectedPreset)"
+        let config: [String: String] = [
+            "baseURL": baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            "model": modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        UserDefaults.standard.set(config, forKey: configKey)
+
+        // 同时保存当前选中的提供商
+        UserDefaults.standard.set(selectedPreset, forKey: "llm_provider")
+    }
+
     private func loadCurrentConfig() {
         let provider = UserDefaults.standard.string(forKey: "llm_provider") ?? MiniMaxService.presets[0].name
         selectedPreset = provider
-        baseURL = UserDefaults.standard.string(forKey: "llm_base_url") ?? MiniMaxService.presets[0].baseURL
-        modelName = UserDefaults.standard.string(forKey: "llm_model") ?? MiniMaxService.presets[0].model
+
+        if provider == "custom" {
+            baseURL = UserDefaults.standard.string(forKey: "llm_custom_base_url") ?? ""
+            modelName = UserDefaults.standard.string(forKey: "llm_custom_model") ?? ""
+        } else {
+            let preset = MiniMaxService.presets.first { $0.name == provider }
+            let configKey = "llm_config_\(provider)"
+            if let savedConfig = UserDefaults.standard.dictionary(forKey: configKey) as? [String: String] {
+                baseURL = savedConfig["baseURL"] ?? preset?.baseURL ?? ""
+                modelName = savedConfig["model"] ?? preset?.model ?? ""
+            } else {
+                baseURL = preset?.baseURL ?? ""
+                modelName = preset?.model ?? ""
+            }
+        }
+
         apiKey = SecureKeyStorage.shared.readAPIKey() ?? ""
     }
-    
+
     private func saveConfig() {
+        // 保存当前预设的独立配置
+        let configKey = "llm_config_\(selectedPreset)"
+        let config: [String: String] = [
+            "baseURL": baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            "model": modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        UserDefaults.standard.set(config, forKey: configKey)
+
+        // 保存当前选中的提供商
         UserDefaults.standard.set(selectedPreset, forKey: "llm_provider")
-        UserDefaults.standard.set(baseURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "llm_base_url")
-        UserDefaults.standard.set(modelName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "llm_model")
+
+        // 保存自定义配置（兼容旧逻辑）
+        if selectedPreset == "custom" {
+            UserDefaults.standard.set(baseURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "llm_custom_base_url")
+            UserDefaults.standard.set(modelName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "llm_custom_model")
+        }
+
+        // 保存 API Key
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedKey.isEmpty {
             _ = SecureKeyStorage.shared.saveAPIKey(trimmedKey)
         } else {
             SecureKeyStorage.shared.deleteAPIKey()
         }
+
         saved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             saved = false
@@ -670,5 +745,152 @@ struct PromptSectionView: View {
             }
             .padding(.bottom, 8)
         }
+    }
+}
+
+// MARK: - 语音配置区域
+
+struct SpeechConfigSectionView: View {
+    @State private var provider: SpeechRecognitionProvider = .local
+    @State private var apiKey: String = ""
+    @State private var modelName: String = ""
+    @State private var saved: Bool = false
+
+    private let textPrimary = Color(hex: "#000000")
+    private let textMuted = Color(hex: "#777169")
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                // 识别引擎选择
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("识别引擎")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(textPrimary)
+                    Text("选择语音识别方式")
+                        .font(.system(size: 11))
+                        .foregroundColor(textMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 引擎选择器
+                FlowLayout(spacing: 8) {
+                    ForEach(SpeechRecognitionProvider.allCases, id: \.rawValue) { p in
+                        Button(action: {
+                            provider = p
+                        }) {
+                            Text(p.rawValue)
+                                .font(.system(size: 11, weight: provider == p ? .medium : .regular))
+                                .foregroundColor(provider == p ? .white : textPrimary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(provider == p ? Color(hex: "#4a90d9") : Color(hex: "#f5f2ef"))
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 云端识别配置
+                if provider == .cloud || provider == .auto {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("云端模型")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(textPrimary)
+                        TextField("fun-asr-flash-8k-realtime", text: $modelName)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("API Key")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(textPrimary)
+                        TextField("sk-...", text: $apiKey)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                    }
+                }
+
+                // 保存状态
+                if saved {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12))
+                        Text("已保存")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundColor(Color.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack(spacing: 12) {
+                    Spacer()
+                    Button("保存") {
+                        saveConfig()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(Color(hex: "#4a90d9"))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+            }
+        }
+        .onAppear {
+            loadConfig()
+        }
+    }
+
+    private func loadConfig() {
+        let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
+        provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
+        apiKey = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
+        modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "fun-asr-flash-8k-realtime"
+    }
+
+    private func saveConfig() {
+        UserDefaults.standard.set(provider.rawValue, forKey: "speechRecognitionProvider")
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKey.isEmpty {
+            _ = SecureKeyStorage.shared.saveSpeechAPIKey(trimmedKey)
+        } else {
+            _ = SecureKeyStorage.shared.saveSpeechAPIKey("")
+        }
+        UserDefaults.standard.set(modelName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "speech_model_name")
+        saved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            saved = false
+        }
+    }
+}
+
+// MARK: - 颜色扩展
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (1, 1, 1, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }

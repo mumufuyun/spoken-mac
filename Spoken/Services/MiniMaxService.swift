@@ -32,13 +32,19 @@ class MiniMaxService {
         let model: String
 
         if let preset = preset, preset.name != "custom" {
-            // 使用预设值，但允许用户覆盖
-            baseURL = UserDefaults.standard.string(forKey: "llm_base_url") ?? preset.baseURL
-            model = UserDefaults.standard.string(forKey: "llm_model") ?? preset.model
+            // 读取该预设的独立配置
+            let configKey = "llm_config_\(preset.name)"
+            if let savedConfig = UserDefaults.standard.dictionary(forKey: configKey) as? [String: String] {
+                baseURL = savedConfig["baseURL"] ?? preset.baseURL
+                model = savedConfig["model"] ?? preset.model
+            } else {
+                baseURL = preset.baseURL
+                model = preset.model
+            }
         } else {
             // 自定义或首次使用：从 UserDefaults 读取，无值则回退到 MiniMax 快速
-            baseURL = UserDefaults.standard.string(forKey: "llm_base_url") ?? Self.presets[0].baseURL
-            model = UserDefaults.standard.string(forKey: "llm_model") ?? Self.presets[0].model
+            baseURL = UserDefaults.standard.string(forKey: "llm_custom_base_url") ?? Self.presets[0].baseURL
+            model = UserDefaults.standard.string(forKey: "llm_custom_model") ?? Self.presets[0].model
         }
 
         return (baseURL, model)

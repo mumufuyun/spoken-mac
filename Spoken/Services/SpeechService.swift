@@ -1,9 +1,29 @@
 import Foundation
 import AVFoundation
 import Speech
+import os
+
+enum SpeechRecognitionProvider: String, CaseIterable {
+    case local = "本地识别"
+    case cloud = "云端识别"
+    case auto = "自动选择"
+}
 
 class SpeechService: NSObject, ObservableObject {
     static let shared = SpeechService()
+    private static let logger = Logger(subsystem: "com.moss.spoken", category: "SpeechService")
+
+    private func logInfo(_ msg: String) {
+        Self.logger.info("\(msg, privacy: .public)")
+    }
+
+    private func logWarn(_ msg: String) {
+        Self.logger.warning("\(msg, privacy: .public)")
+    }
+
+    private func logError(_ msg: String) {
+        Self.logger.error("\(msg, privacy: .public)")
+    }
 
     private var audioEngine: AVAudioEngine = AVAudioEngine()
     private var speechRecognizer: SFSpeechRecognizer?
@@ -28,6 +48,11 @@ class SpeechService: NSObject, ObservableObject {
     private let stopBufferMs: UInt32 = 200_000
 
     private var retryWorkItem: DispatchWorkItem?
+
+    private var currentProvider: SpeechRecognitionProvider = .local
+    private var isUsingCloud = false
+    private var cloudFallbackWorkItem: DispatchWorkItem?
+    var onCloudConnected: (() -> Void)?
 
     private override init() {
         super.init()
@@ -140,7 +165,7 @@ class SpeechService: NSObject, ObservableObject {
             self.audioEngine.inputNode.installTap(onBus: bus, bufferSize: bufferSize, format: format, block: block)
         }
         if let error = result {
-            print("Spoken: [ERROR] installTap threw exception: \(error)")
+            logError("installTap threw exception: \(error)")
             return false
         }
         return true
@@ -152,6 +177,8 @@ class SpeechService: NSObject, ObservableObject {
         // 取消待执行的重试任务
         retryWorkItem?.cancel()
         retryWorkItem = nil
+        cloudFallbackWorkItem?.cancel()
+        cloudFallbackWorkItem = nil
 
         // 清理识别任务
         recognitionTask?.cancel()
@@ -169,6 +196,8 @@ class SpeechService: NSObject, ObservableObject {
             audioEngine.stop()
         }
         audioEngine.reset()
+
+        isUsingCloud = false
     }
 
     /// 重建音频引擎，用于长时间不活动后引擎内部状态失效的场景
@@ -185,12 +214,179 @@ class SpeechService: NSObject, ObservableObject {
 
     func startRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) -> Bool {
         guard state == .idle else {
-            print("Spoken: [WARN] startRecording ignored, state is \(state)")
+            logWarn("startRecording ignored, state is \(String(describing: self.state))")
             return false
         }
 
-        installTapAndStart(onPartial: onPartial, onFinal: onFinal)
+        let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
+        let provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
+        currentProvider = provider
+        logInfo("startRecording, provider=\(provider.rawValue)")
+
+        switch provider {
+        case .local:
+            installTapAndStart(onPartial: onPartial, onFinal: onFinal)
+        case .cloud:
+            startCloudRecording(onPartial: onPartial, onFinal: onFinal)
+        case .auto:
+            startCloudRecording(onPartial: onPartial, onFinal: onFinal, allowFallback: true)
+        }
+
         return true
+    }
+
+    func prepareCloudConnection() {
+        let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
+        let provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
+        guard provider == .cloud || provider == .auto else {
+            logInfo("prepareCloudConnection skipped, provider=\(provider.rawValue)")
+            return
+        }
+        logInfo("prepareCloudConnection called")
+        CloudSpeechService.shared.preconnect()
+    }
+
+    // MARK: - 云端识别
+
+    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, allowFallback: Bool = false) {
+        logInfo("startCloudRecording called, allowFallback=\(allowFallback)")
+        resetAudioEngine()
+
+        audioReceived = false
+        state = .starting
+        lastRecognizedText = ""
+        capturedOnPartial = onPartial
+        capturedOnFinal = onFinal
+        isUsingCloud = true
+
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        logInfo("cloud inputNode format: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
+
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            logError("Invalid input format, audio input unavailable")
+            if allowFallback {
+                logInfo("auto fallback to local")
+                currentProvider = .local
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal)
+            } else {
+                cleanupResources()
+                state = .idle
+            }
+            return
+        }
+
+        let speechFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                          sampleRate: 16000,
+                                          channels: 1,
+                                          interleaved: true)
+        var tapFormat: AVAudioFormat? = speechFormat
+        var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+            guard let self = self, self.isRecording else { return }
+            self.audioReceived = true
+            guard self.isUsingCloud else { return }
+
+            let audioBuffer = buffer.audioBufferList.pointee.mBuffers
+            guard let data = audioBuffer.mData else { return }
+            let pcmData = Data(bytes: data, count: Int(audioBuffer.mDataByteSize))
+            CloudSpeechService.shared.sendAudio(pcmData)
+        }
+
+        if !tapInstalled, speechFormat != nil {
+            logWarn("cloud installTap with 16kHz format failed, falling back to hardware native format")
+            tapFormat = nil
+            tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+                guard let self = self, self.isRecording else { return }
+                self.audioReceived = true
+                guard self.isUsingCloud else { return }
+
+                let audioBuffer = buffer.audioBufferList.pointee.mBuffers
+                guard let data = audioBuffer.mData else { return }
+                let pcmData = Data(bytes: data, count: Int(audioBuffer.mDataByteSize))
+                CloudSpeechService.shared.sendAudio(pcmData)
+            }
+        }
+
+        logInfo("Cloud tap installed with format: \(tapFormat == nil ? "hardware native" : "16kHz/mono/Int16"), success: \(tapInstalled)")
+
+        if !tapInstalled {
+            logError("Failed to install cloud tap on audio engine")
+            if allowFallback {
+                logInfo("auto fallback to local")
+                currentProvider = .local
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal)
+            } else {
+                cleanupResources()
+                state = .idle
+            }
+            return
+        }
+
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+            logInfo("audioEngine started")
+        } catch {
+            logError("Audio engine failed to start: \(error)")
+            if allowFallback {
+                logInfo("auto fallback to local")
+                currentProvider = .local
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal)
+            } else {
+                cleanupResources()
+                state = .idle
+            }
+            return
+        }
+
+        usleep(200_000)
+        state = .recording
+        logInfo("state changed to recording")
+
+        CloudSpeechService.shared.onConnected = { [weak self] in
+            self?.logInfo("CloudSpeechService.onConnected triggered")
+            DispatchQueue.main.async {
+                self?.onCloudConnected?()
+            }
+        }
+
+        let modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "fun-asr-flash-8k-realtime"
+        logInfo("connecting to cloud with model=\(modelName)")
+
+        CloudSpeechService.shared.connect(
+            model: modelName,
+            onPartial: { [weak self] text in
+                guard let self = self else { return }
+                self.lastRecognizedText = text
+                logInfo("cloud onPartial: '\(text)'")
+                DispatchQueue.main.async { self.capturedOnPartial?(text) }
+            },
+            onFinal: { [weak self] text in
+                guard let self = self else { return }
+                logInfo("cloud onFinal (sentence_end from server, ignored): '\(text)'")
+                // 忽略服务端返回的 sentence_end，只更新最后识别文本
+                // 用户必须按快捷键才会结束录音
+                self.lastRecognizedText = SpeechPostProcessor.postProcess(text)
+            },
+            onError: { [weak self] error in
+                guard let self = self else { return }
+                logError("Cloud speech error: \(error)")
+                if allowFallback && self.state != .stopping && self.state != .cancelled {
+                    logInfo("auto fallback to local due to cloud error")
+                    self.cleanupResources()
+                    self.currentProvider = .local
+                    self.installTapAndStart(onPartial: onPartial, onFinal: onFinal)
+                } else {
+                    self.cleanupResources()
+                    self.state = .idle
+                }
+            }
+        )
+
+        if CloudSpeechService.shared.isWebSocketOpen {
+            logInfo("webSocket already open, triggering onConnected")
+            CloudSpeechService.shared.onConnected?()
+        }
     }
 
     private func installTapAndStart(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) {
@@ -199,7 +395,7 @@ class SpeechService: NSObject, ObservableObject {
 
         func attemptStart(retryCount: Int) {
             guard retryCount < maxRetries else {
-                print("Spoken: [ERROR] Failed to start recording after \(maxRetries) retries")
+                logError("Failed to start recording after \(maxRetries) retries")
                 cleanupResources()
                 state = .idle
                 return
@@ -217,10 +413,10 @@ class SpeechService: NSObject, ObservableObject {
 
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
-            print("Spoken: [DEBUG] inputNode format: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
+            logInfo("inputNode format: sampleRate=\(recordingFormat.sampleRate), channels=\(recordingFormat.channelCount)")
 
             guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
-                print("Spoken: [ERROR] Invalid input format, audio input unavailable")
+                logError("Invalid input format, audio input unavailable")
                 cleanupResources()
                 state = .idle
                 return
@@ -246,7 +442,7 @@ class SpeechService: NSObject, ObservableObject {
             }
 
             if !tapInstalled, speechFormat != nil {
-                print("Spoken: [WARN] installTap with 16kHz format failed, falling back to hardware native format")
+                logWarn("installTap with 16kHz format failed, falling back to hardware native format")
                 tapFormat = nil
                 tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
                     guard let self = self, self.isRecording else { return }
@@ -255,10 +451,10 @@ class SpeechService: NSObject, ObservableObject {
                 }
             }
 
-            print("Spoken: [DEBUG] Tap installed with format: \(tapFormat == nil ? "hardware native" : "16kHz/mono/Int16"), success: \(tapInstalled)")
+            logInfo("Tap installed with format: \(tapFormat == nil ? "hardware native" : "16kHz/mono/Int16"), success: \(tapInstalled)")
 
             if !tapInstalled {
-                print("Spoken: [ERROR] Failed to install tap on audio engine (attempt \(retryCount + 1))")
+                logError("Failed to install tap on audio engine (attempt \(retryCount + 1))")
                 // tap 安装失败，尝试重试
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     attemptStart(retryCount: retryCount + 1)
@@ -270,7 +466,7 @@ class SpeechService: NSObject, ObservableObject {
             do {
                 try audioEngine.start()
             } catch {
-                print("Spoken: [ERROR] Audio engine failed to start: \(error)")
+                logError("Audio engine failed to start: \(error)")
                 cleanupResources()
                 state = .idle
                 return
@@ -283,7 +479,7 @@ class SpeechService: NSObject, ObservableObject {
 
             let locale = Locale(identifier: self.currentLanguage.rawValue)
             guard let speechRecognizer = SFSpeechRecognizer(locale: locale) else {
-                print("Spoken: [ERROR] Failed to create speech recognizer for locale: \(self.currentLanguage.rawValue)")
+                logError("Failed to create speech recognizer for locale: \(self.currentLanguage.rawValue)")
                 self.cleanupResources()
                 self.state = .idle
                 return
@@ -291,13 +487,13 @@ class SpeechService: NSObject, ObservableObject {
             self.speechRecognizer = speechRecognizer
 
             guard speechRecognizer.isAvailable else {
-                print("Spoken: [ERROR] Speech recognizer not available for locale: \(self.currentLanguage.rawValue)")
+                logError("Speech recognizer not available for locale: \(self.currentLanguage.rawValue)")
                 self.cleanupResources()
                 self.state = .idle
                 return
             }
 
-            print("Spoken: [DEBUG] Speech recognizer created and available for \(self.currentLanguage.rawValue), starting recognition task")
+            logInfo("Speech recognizer created and available for \(self.currentLanguage.rawValue), starting recognition task")
 
             self.recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
                 guard let self = self else { return }
@@ -305,35 +501,35 @@ class SpeechService: NSObject, ObservableObject {
                 if let error = error {
                     let desc = error.localizedDescription.lowercased()
                     if desc.contains("cancel") || desc.contains("end") {
-                        print("Spoken: [DEBUG] recognitionTask ended: \(error.localizedDescription)")
+                        logInfo("recognitionTask ended: \(error.localizedDescription)")
                         return
                     }
                     if desc.contains("no speech") {
-                        print("Spoken: [WARN] recognitionTask: no speech detected - \(error.localizedDescription)")
+                        logWarn("recognitionTask: no speech detected - \(error.localizedDescription)")
                         return
                     }
-                    print("Spoken: [ERROR] recognitionTask error: \(error.localizedDescription)")
+                    logError("recognitionTask error: \(error.localizedDescription)")
                     return
                 }
 
                 guard let result = result else {
-                    print("Spoken: [WARN] recognitionTask callback with nil result and nil error")
+                    logWarn("recognitionTask callback with nil result and nil error")
                     return
                 }
 
                 let text = result.bestTranscription.formattedString
                 if !text.isEmpty {
                     self.lastRecognizedText = text
-                    print("Spoken: [DEBUG] partial result: \(text)")
+                    logInfo("partial result: \(text)")
                     DispatchQueue.main.async { self.capturedOnPartial?(text) }
                 }
 
                 if result.isFinal {
                     let processedText = SpeechPostProcessor.postProcess(text)
                     if processedText != text {
-                        print("Spoken: [DEBUG] post-processed: '\(text)' → '\(processedText)'")
+                        logInfo("post-processed: '\(text)' → '\(processedText)'")
                     }
-                    print("Spoken: [DEBUG] final result: \(processedText)")
+                    logInfo("final result: \(processedText)")
                     self.stopAndFinish(lastText: processedText)
                 }
             }
@@ -343,7 +539,7 @@ class SpeechService: NSObject, ObservableObject {
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 if self.state == .recording && !self.audioReceived {
-                    print("Spoken: [WARN] Tap not receiving audio after \(Int(delay * 1000))ms, retrying (attempt \(retryCount + 1))")
+                    logWarn("Tap not receiving audio after \(Int(delay * 1000))ms, retrying (attempt \(retryCount + 1))")
                     attemptStart(retryCount: retryCount + 1)
                 }
             }
@@ -363,12 +559,17 @@ class SpeechService: NSObject, ObservableObject {
         guard !isStopping else { return }
         state = .stopping
 
+        if isUsingCloud {
+            CloudSpeechService.shared.finish()
+            CloudSpeechService.shared.disconnect()
+        }
+
         cleanupResources()
 
         usleep(stopBufferMs)
 
         let text = lastText.trimmingCharacters(in: .whitespacesAndNewlines)
-        print("Spoken: [DEBUG] stopAndFinish: finalText='\(text)'")
+        logInfo("stopAndFinish: finalText='\(text)'")
 
         state = .idle
         capturedOnFinal?(text)
@@ -381,17 +582,21 @@ class SpeechService: NSObject, ObservableObject {
             return
         }
 
+        if isUsingCloud {
+            CloudSpeechService.shared.disconnect()
+        }
+
         cleanupResources()
         state = .idle
 
-        print("Spoken: [DEBUG] recording cancelled")
+        logInfo("recording cancelled")
     }
 
     /// 用户手动停止录音（停止并返回当前识别结果，触发 onFinal）
     func stopRecording() {
         guard state == .recording else { return }
         let text = lastRecognizedText
-        print("Spoken: [DEBUG] stopRecording: finalText='\(text)'")
+        logInfo("stopRecording: finalText='\(text)'")
         stopAndFinish(lastText: text)
     }
 
@@ -403,5 +608,3 @@ class SpeechService: NSObject, ObservableObject {
         return isRecording
     }
 }
-
-

@@ -15,12 +15,13 @@
 		863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D34239B1DE4FD221AA22A2D /* main.swift */; };
 		8C1F59F1AA0131173FEAB075 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C35543EA1D8AA432D86247B2 /* Assets.xcassets */; };
 		8E780E11AB623869A3F7ACB2 /* TextInjectionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */; };
-		B8372AFE48FCAFB291241A9C /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E81D41BC1FDD9172B9D55D6 /* Color+Hex.swift */; };
 		C14DC1DF60AE5E90903F589B /* MiniMaxService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */; };
 		D2B5F8C13E4A6D7F0B9E2A1C /* SecureKeyStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */; };
 		DDBCCCB4172846FE9663FF08 /* SpeechPostProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */; };
-00C9269B3E9B42FEAD7A0CA1 /* ObjCExceptionCatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */; };
-74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */; };
+		A1B2C3D4E5F6789012345678 /* CloudSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7890123456789 /* CloudSpeechService.swift */; };
+		F1A2B3C4D5E6F78901234567 /* AudioConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D3F4A5B6C7D8E901234567 /* AudioConverter.swift */; };
+		00C9269B3E9B42FEAD7A0CA1 /* ObjCExceptionCatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */; };
+		74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,7 +32,6 @@
 		76F4A99A2E36BB4C4068A3D6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		80D8DB3AB22966206517C70F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		876CF505EC5F976A23DF7E41 /* HotKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyService.swift; sourceTree = "<group>"; };
-		9E81D41BC1FDD9172B9D55D6 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjectionEngine.swift; sourceTree = "<group>"; };
 		BB2856E4008DD751136C6955 /* KeyboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardService.swift; sourceTree = "<group>"; };
 		C35543EA1D8AA432D86247B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -39,7 +39,9 @@
 		F8679A79BD60AE28D9BD1F79 /* MiniMaxService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMaxService.swift; sourceTree = "<group>"; };
 		A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureKeyStorage.swift; sourceTree = "<group>"; };
 		68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechPostProcessor.swift; sourceTree = "<group>"; };
-B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
+		B2C3D4E5F6A7890123456789 /* CloudSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSpeechService.swift; sourceTree = "<group>"; };
+		E2D3F4A5B6C7D8E901234567 /* AudioConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConverter.swift; sourceTree = "<group>"; };
+		B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
 4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptionCatcher.m; sourceTree = "<group>"; };
 1CC5ED6598304C359F6F90E6 /* Spoken-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Spoken-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -56,6 +58,8 @@ B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference;
 				A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */,
 				EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */,
 				68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */,
+				B2C3D4E5F6A7890123456789 /* CloudSpeechService.swift */,
+				E2D3F4A5B6C7D8E901234567 /* AudioConverter.swift */,
 				B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */,
 			);
 			path = Services;
@@ -113,7 +117,6 @@ B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference;
 		E71E4302A54EB2020F6650EF /* Extensions */ = {
 			isa = PBXGroup;
 			children = (
-				9E81D41BC1FDD9172B9D55D6 /* Color+Hex.swift */,
 			);
 			path = Extensions;
 			sourceTree = "<group>";
@@ -198,7 +201,6 @@ B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference;
 			files = (
 				74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */,
 				118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */,
-				B8372AFE48FCAFB291241A9C /* Color+Hex.swift in Sources */,
 				17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */,
 				60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */,
 				39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */,
@@ -206,6 +208,8 @@ B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference;
 				D2B5F8C13E4A6D7F0B9E2A1C /* SecureKeyStorage.swift in Sources */,
 				3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */,
 				DDBCCCB4172846FE9663FF08 /* SpeechPostProcessor.swift in Sources */,
+				A1B2C3D4E5F6789012345678 /* CloudSpeechService.swift in Sources */,
+				F1A2B3C4D5E6F78901234567 /* AudioConverter.swift in Sources */,
 				8E780E11AB623869A3F7ACB2 /* TextInjectionEngine.swift in Sources */,
 				863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */,
 			);
@@ -271,7 +275,7 @@ B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.5.0;
+				MARKETING_VERSION = 2.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -349,7 +353,7 @@ B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.5.0;
+				MARKETING_VERSION = 2.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = Spoken;

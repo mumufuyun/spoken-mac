@@ -9,6 +9,7 @@ enum AppState: String, CaseIterable {
     case idle
     case starting
     case recording
+    case cloudRecognizing
     case finishing
     case injecting
     case postProcessing
@@ -138,6 +139,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        SpeechService.shared.prepareCloudConnection()
         showRecordingPanel()
     }
 
@@ -309,6 +311,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 class RecordingViewModel: ObservableObject {
     @Published var isRecording = false
+    @Published var isCloudRecognizing = false
     @Published var isProcessing = false
     @Published var partialText = ""
     @Published var statusText = "正在聆听..."
@@ -332,6 +335,18 @@ class RecordingViewModel: ObservableObject {
         displayStatus = "录音"
 
         stateManager.transition(to: .recording)
+
+        let providerRaw = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
+        let provider = SpeechRecognitionProvider(rawValue: providerRaw) ?? .local
+        if provider == .cloud || provider == .auto {
+            isCloudRecognizing = true
+        }
+
+        SpeechService.shared.onCloudConnected = { [weak self] in
+            DispatchQueue.main.async {
+                self?.isCloudRecognizing = true
+            }
+        }
 
         let started = SpeechService.shared.startRecording(
             onPartial: { [weak self] text in
@@ -368,6 +383,7 @@ class RecordingViewModel: ObservableObject {
 
         if !started {
             isRecording = false
+            isCloudRecognizing = false
             statusText = "录音启动失败，请重试"
             stateManager.transition(to: .idle)
         }
@@ -382,6 +398,7 @@ class RecordingViewModel: ObservableObject {
 
         statusText = "已取消"
         isRecording = false
+        isCloudRecognizing = false
         isProcessing = false
 
         onCancel?()
@@ -390,6 +407,7 @@ class RecordingViewModel: ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
+        isCloudRecognizing = false
         statusText = ""
 
         let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
@@ -520,6 +538,25 @@ struct RecordingPanelView: View {
                         pulseScale = 1.0
                         withAnimation { pulseScale = 1.3 }
                     }
+                } else if viewModel.isCloudRecognizing {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(Color(hex: "#4a90d9"))
+                            .frame(width: 6, height: 6)
+                            .scaleEffect(pulseScale)
+                            .animation(
+                                .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                                value: pulseScale
+                            )
+                        Text("云端识别中...")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(0.14)
+                            .foregroundColor(Color(hex: "#4a90d9"))
+                    }
+                    .onAppear {
+                        pulseScale = 1.0
+                        withAnimation { pulseScale = 1.3 }
+                    }
                 } else if viewModel.isProcessing {
                     HStack(spacing: 5) {
                         Circle()
@@ -548,6 +585,7 @@ struct RecordingPanelView: View {
 
             WaveformView(
                 isRecording: viewModel.isRecording,
+                isCloudRecognizing: viewModel.isCloudRecognizing,
                 isProcessing: viewModel.isProcessing
             )
             .frame(height: 48)
@@ -591,7 +629,7 @@ struct RecordingPanelView: View {
                         .cornerRadius(6)
                         .buttonStyle(.plain)
                     }
-                } else if viewModel.isProcessing {
+                } else if viewModel.isCloudRecognizing || viewModel.isProcessing {
                     HStack(spacing: 10) {
                         Spacer()
                         Button("取消") {
@@ -626,6 +664,7 @@ struct RecordingPanelView: View {
 
 struct WaveformView: View {
     let isRecording: Bool
+    let isCloudRecognizing: Bool
     let isProcessing: Bool
 
     @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 24)
@@ -645,12 +684,19 @@ struct WaveformView: View {
         }
         .frame(height: 48)
         .onAppear {
-            if isRecording {
+            if isRecording || isCloudRecognizing {
                 startAnimation()
             }
         }
         .onChange(of: isRecording) { _, newValue in
-            if newValue {
+            if newValue || isCloudRecognizing {
+                startAnimation()
+            } else {
+                stopAnimation()
+            }
+        }
+        .onChange(of: isCloudRecognizing) { _, newValue in
+            if newValue || isRecording {
                 startAnimation()
             } else {
                 stopAnimation()
@@ -662,6 +708,12 @@ struct WaveformView: View {
         if isProcessing {
             return LinearGradient(
                 colors: [Color(hex: "#f39c12"), Color(hex: "#e67e22")],
+                startPoint: .bottom,
+                endPoint: .top
+            )
+        } else if isCloudRecognizing {
+            return LinearGradient(
+                colors: [Color(hex: "#4a90d9"), Color(hex: "#2980b9")],
                 startPoint: .bottom,
                 endPoint: .top
             )
