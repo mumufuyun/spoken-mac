@@ -210,12 +210,38 @@ class SpeechService: NSObject, ObservableObject {
         audioEngine.reset()
     }
 
+    /// 彻底重建 AVAudioEngine 实例，解决长时间闲置后 inputNode 失效的问题
+    private func rebuildAudioEngine() {
+        logInfo("Rebuilding AVAudioEngine instance...")
+        safeRemoveTap(onBus: 0)
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+        audioEngine = AVAudioEngine()
+        usleep(200_000) // 给新引擎初始化时间
+        logInfo("AVAudioEngine rebuilt")
+    }
+
+    /// 检查音频引擎是否健康（inputNode 格式有效）
+    private func isAudioEngineHealthy() -> Bool {
+        let format = audioEngine.inputNode.outputFormat(forBus: 0)
+        let healthy = format.sampleRate > 0 && format.channelCount > 0
+        logInfo("Audio engine health check: sampleRate=\(format.sampleRate), channels=\(format.channelCount), healthy=\(healthy)")
+        return healthy
+    }
+
     // MARK: - 开始录音
 
     func startRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void) -> Bool {
         guard state == .idle else {
             logWarn("startRecording ignored, state is \(String(describing: self.state))")
             return false
+        }
+
+        // 长时间闲置后音频引擎可能失效，先检查健康状态
+        if !isAudioEngineHealthy() {
+            logWarn("Audio engine unhealthy after idle, rebuilding...")
+            rebuildAudioEngine()
         }
 
         let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
@@ -403,6 +429,12 @@ class SpeechService: NSObject, ObservableObject {
 
             // 完整清理旧资源并重建音频引擎
             resetAudioEngine()
+
+            // 长时间闲置后引擎可能已失效，若健康检查仍失败则彻底重建
+            if !isAudioEngineHealthy() {
+                logWarn("Audio engine still unhealthy after reset, rebuilding instance (attempt \(retryCount + 1))")
+                rebuildAudioEngine()
+            }
 
             // 重置状态
             audioReceived = false
