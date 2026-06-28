@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import Speech
 import os
+import Combine
 
 enum SpeechRecognitionProvider: String, CaseIterable {
     case local = "本地识别"
@@ -53,6 +54,8 @@ class SpeechService: NSObject, ObservableObject {
     private var isUsingCloud = false
     private var cloudFallbackWorkItem: DispatchWorkItem?
     var onCloudConnected: (() -> Void)?
+    var onCloudConnectionFailed: ((String) -> Void)?
+    private var cancellables = Set<AnyCancellable>()
 
     private override init() {
         super.init()
@@ -376,6 +379,17 @@ class SpeechService: NSObject, ObservableObject {
             }
         }
 
+        // 监听连接状态变化，失败时通知 UI
+        CloudSpeechService.shared.$connectionState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                if case .failed(let reason) = state {
+                    self?.logWarn("Cloud connection failed: \(reason)")
+                    self?.onCloudConnectionFailed?(reason)
+                }
+            }
+            .store(in: &cancellables)
+
         let modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "fun-asr-flash-8k-realtime"
         logInfo("connecting to cloud with model=\(modelName)")
 
@@ -397,6 +411,8 @@ class SpeechService: NSObject, ObservableObject {
             onError: { [weak self] error in
                 guard let self = self else { return }
                 logError("Cloud speech error: \(error)")
+                let errorDesc = error.localizedDescription
+                DispatchQueue.main.async { self.onCloudConnectionFailed?(errorDesc) }
                 if allowFallback && self.state != .stopping && self.state != .cancelled {
                     logInfo("auto fallback to local due to cloud error")
                     self.cleanupResources()
@@ -409,8 +425,8 @@ class SpeechService: NSObject, ObservableObject {
             }
         )
 
-        if CloudSpeechService.shared.isWebSocketOpen {
-            logInfo("webSocket already open, triggering onConnected")
+        if CloudSpeechService.shared.isReady {
+            logInfo("cloud provider already ready, triggering onConnected")
             CloudSpeechService.shared.onConnected?()
         }
     }

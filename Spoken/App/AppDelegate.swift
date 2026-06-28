@@ -348,6 +348,16 @@ class RecordingViewModel: ObservableObject {
             }
         }
 
+        SpeechService.shared.onCloudConnectionFailed = { [weak self] reason in
+            DispatchQueue.main.async {
+                guard let self = self, self.isRecording else { return }
+                // 云端连接失败时，在状态文本中提示用户
+                if self.isCloudRecognizing && self.partialText.isEmpty {
+                    self.statusText = "云端连接失败，已切换本地识别"
+                }
+            }
+        }
+
         let started = SpeechService.shared.startRecording(
             onPartial: { [weak self] text in
                 DispatchQueue.main.async {
