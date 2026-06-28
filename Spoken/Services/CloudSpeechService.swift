@@ -777,6 +777,7 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
     private func sendSessionUpdate() {
         guard let task = webSocketTask else { return }
 
+        // 注意：turn_detection 必须完全省略，不能传 null，否则服务端会断开连接
         let event: [String: Any] = [
             "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))",
             "type": "session.update",
@@ -786,18 +787,22 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
                 "sample_rate": 16000,
                 "input_audio_transcription": [
                     "language": "zh"
-                ],
-                "turn_detection": NSNull()
+                ]
             ]
         ]
 
         do {
-            let jsonData = try JSONSerialization.data(withJSONObject: event)
+            let jsonData = try JSONSerialization.data(withJSONObject: event, options: .prettyPrinted)
             guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+            logInfo("sending session.update: \(jsonString)")
             let message = URLSessionWebSocketTask.Message.string(jsonString)
-            logInfo("sending session.update")
             task.send(message) { [weak self] error in
-                if let error = error { self?.handleError(error) }
+                if let error = error {
+                    Self.shared.logError("session.update send failed: \(error.localizedDescription)")
+                    self?.handleError(error)
+                } else {
+                    Self.shared.logInfo("session.update sent successfully")
+                }
             }
         } catch { handleError(error) }
     }
@@ -840,17 +845,38 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
             logInfo("session created")
             onConnected?()
 
+        case "session.updated":
+            logInfo("session updated")
+
         case "input_audio_buffer.committed":
             logInfo("audio buffer committed")
 
         case "conversation.item.input_audio_transcription.completed":
+            // 新格式: 直接包含 transcript 字段
             if let transcript = json["transcript"] as? String, !transcript.isEmpty {
+                accumulatedText = accumulatedText.isEmpty ? transcript : accumulatedText + transcript
+                DispatchQueue.main.async { self.onPartial?(self.accumulatedText) }
+            }
+            // 旧格式: 嵌套在 item 中
+            else if let item = json["item"] as? [String: Any],
+                    let content = item["content"] as? [[String: Any]],
+                    let first = content.first,
+                    let transcript = first["transcript"] as? String, !transcript.isEmpty {
                 accumulatedText = accumulatedText.isEmpty ? transcript : accumulatedText + transcript
                 DispatchQueue.main.async { self.onPartial?(self.accumulatedText) }
             }
 
         case "conversation.item.input_audio_transcription.delta":
+            // 新格式
             if let delta = json["delta"] as? String, !delta.isEmpty {
+                let displayText = accumulatedText.isEmpty ? delta : accumulatedText + delta
+                DispatchQueue.main.async { self.onPartial?(displayText) }
+            }
+            // 旧格式: 嵌套在 item 中
+            else if let item = json["item"] as? [String: Any],
+                    let content = item["content"] as? [[String: Any]],
+                    let first = content.first,
+                    let delta = first["delta"] as? String, !delta.isEmpty {
                 let displayText = accumulatedText.isEmpty ? delta : accumulatedText + delta
                 DispatchQueue.main.async { self.onPartial?(displayText) }
             }
@@ -897,8 +923,11 @@ extension QwenRealtimeSpeechProvider: URLSessionWebSocketDelegate {
         cancelTimeoutTimer()
         cancelPreconnect()
         updateState(.connected)
-        sendSessionUpdate()
-        receiveMessage()
+        // 延迟发送 session.update，确保连接完全建立
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.sendSessionUpdate()
+            self?.receiveMessage()
+        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
