@@ -889,7 +889,7 @@ struct SpeechConfigSectionView: View {
     private func loadConfig() {
         let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
         provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
-        cloudProviderId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "dashscope"
+        cloudProviderId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "qwen-realtime"
         apiKey = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
         modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? defaultModelPlaceholder()
     }

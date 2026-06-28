@@ -62,7 +62,7 @@ class CloudSpeechProviderRegistry {
     }
 
     func defaultProvider() -> CloudSpeechProvider? {
-        provider(id: "dashscope")
+        provider(id: "qwen-realtime")
     }
 
     func allProviders() -> [CloudSpeechProvider] {
@@ -122,7 +122,6 @@ class CloudSpeechService: NSObject {
 
     private override init() {
         super.init()
-        CloudSpeechProviderRegistry.shared.register(DashScopeSpeechProvider.shared)
         CloudSpeechProviderRegistry.shared.register(QwenRealtimeSpeechProvider.shared)
     }
 
@@ -137,7 +136,7 @@ class CloudSpeechService: NSObject {
     }
 
     private func resolveProvider() -> CloudSpeechProvider? {
-        let providerId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "dashscope"
+        let providerId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "qwen-realtime"
         let provider = CloudSpeechProviderRegistry.shared.provider(id: providerId)
         if provider == nil {
             logWarn("Provider '\(providerId)' not found, falling back to dashscope")
