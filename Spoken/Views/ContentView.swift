@@ -752,6 +752,7 @@ struct PromptSectionView: View {
 
 struct SpeechConfigSectionView: View {
     @State private var provider: SpeechRecognitionProvider = .local
+    @State private var cloudProviderId: String = "dashscope"
     @State private var apiKey: String = ""
     @State private var modelName: String = ""
     @State private var saved: Bool = false
@@ -792,13 +793,41 @@ struct SpeechConfigSectionView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // 云端识别配置
+                // 云端 Provider 选择
                 if provider == .cloud || provider == .auto {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("云端服务")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(textPrimary)
+                        Text("选择云端语音识别服务提供商")
+                            .font(.system(size: 11))
+                            .foregroundColor(textMuted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    FlowLayout(spacing: 8) {
+                        ForEach(availableCloudProviders(), id: \.id) { p in
+                            Button(action: {
+                                cloudProviderId = p.id
+                            }) {
+                                Text(p.name)
+                                    .font(.system(size: 11, weight: cloudProviderId == p.id ? .medium : .regular))
+                                    .foregroundColor(cloudProviderId == p.id ? .white : textPrimary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(cloudProviderId == p.id ? Color(hex: "#4a90d9") : Color(hex: "#f5f2ef"))
+                                    .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                     VStack(alignment: .leading, spacing: 6) {
                         Text("云端模型")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(textPrimary)
-                        TextField("fun-asr-flash-8k-realtime", text: $modelName)
+                        TextField(defaultModelPlaceholder(), text: $modelName)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 12))
                     }
@@ -844,22 +873,38 @@ struct SpeechConfigSectionView: View {
         }
     }
 
+    private func availableCloudProviders() -> [(id: String, name: String)] {
+        CloudSpeechService.shared.availableProviders()
+    }
+
+    private func defaultModelPlaceholder() -> String {
+        switch cloudProviderId {
+        case "qwen-realtime":
+            return "qwen3-asr-flash-realtime"
+        default:
+            return "fun-asr-flash-8k-realtime"
+        }
+    }
+
     private func loadConfig() {
         let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
         provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
+        cloudProviderId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "dashscope"
         apiKey = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
-        modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "fun-asr-flash-8k-realtime"
+        modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? defaultModelPlaceholder()
     }
 
     private func saveConfig() {
         UserDefaults.standard.set(provider.rawValue, forKey: "speechRecognitionProvider")
+        UserDefaults.standard.set(cloudProviderId, forKey: "cloud_speech_provider")
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedKey.isEmpty {
             _ = SecureKeyStorage.shared.saveSpeechAPIKey(trimmedKey)
         } else {
             _ = SecureKeyStorage.shared.saveSpeechAPIKey("")
         }
-        UserDefaults.standard.set(modelName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "speech_model_name")
+        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(model.isEmpty ? defaultModelPlaceholder() : model, forKey: "speech_model_name")
         saved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             saved = false
