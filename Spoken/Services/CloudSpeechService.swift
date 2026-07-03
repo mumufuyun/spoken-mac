@@ -385,6 +385,7 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
 
     private(set) var isWebSocketOpen = false
     private var sessionCreated = false
+    private var sessionUpdateSent = false
     private var effectiveModel: String = ""
     private let timeoutInterval: TimeInterval = 30
     private var timeoutWorkItem: DispatchWorkItem?
@@ -447,10 +448,11 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
         if isWebSocketOpen, webSocketTask != nil {
             cancelPreconnect()
             self.effectiveModel = effectiveModel
-            if !sessionCreated {
+            if !sessionCreated, !sessionUpdateSent {
                 sendSessionUpdate()
+            } else if sessionCreated {
+                onConnected?()
             }
-            onConnected?()
             return
         }
 
@@ -583,6 +585,7 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
         webSocketTask = nil
         isWebSocketOpen = false
         sessionCreated = false
+        sessionUpdateSent = false
         accumulatedText = ""
         onPartial = nil
         onFinal = nil
@@ -612,6 +615,7 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: event, options: .prettyPrinted)
             guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+            sessionUpdateSent = true
             logInfo("sending session.update: \(jsonString)")
             let message = URLSessionWebSocketTask.Message.string(jsonString)
             task.send(message) { [weak self] error in
