@@ -27,9 +27,8 @@ class FileLogger {
 
         do {
             try fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true, attributes: nil)
-            UnifiedLogger(subsystem: "com.moss.spoken", category: "FileLogger").info("Log directory: \(logDirectory.path)")
         } catch {
-            UnifiedLogger(subsystem: "com.moss.spoken", category: "FileLogger").error("Failed to create log directory: \(error)")
+            // 目录创建失败时静默处理，避免初始化时抛出
         }
 
         rotateIfNeeded()
@@ -735,9 +734,8 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
 }
 
 extension QwenRealtimeSpeechProvider: URLSessionWebSocketDelegate {
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        let proto = `protocol` ?? "nil"
-        logInfo("WebSocket connected, protocol=\(proto)")
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol proto: String?) {
+        logInfo("WebSocket connected, protocol=\(proto ?? "nil")")
         isWebSocketOpen = true
         cancelTimeoutTimer()
         cancelPreconnect()

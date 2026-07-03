@@ -9,3 +9,10 @@ config.toml
 *.exe
 *.pkg
 *.pyz
+.DS_Store
+._*
+DerivedData/
+.catpaw/
+.trae/documents/
+.trae/documents/archive/
+*.dmg
