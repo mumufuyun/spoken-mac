@@ -12,7 +12,7 @@ enum SpeechRecognitionProvider: String, CaseIterable {
 
 class SpeechService: NSObject, ObservableObject {
     static let shared = SpeechService()
-    private static let logger = Logger(subsystem: "com.moss.spoken", category: "SpeechService")
+    private static let logger = os.Logger(subsystem: "com.moss.spoken", category: "SpeechService")
 
     private func logInfo(_ msg: String) {
         Self.logger.info("\(msg, privacy: .public)")
