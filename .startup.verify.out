@@ -1,0 +1,76 @@
+2026-04-17 22:36:02 [INFO] __main__: ============================================================
+2026-04-17 22:36:02 [INFO] __main__: Spoken 启动中...
+2026-04-17 22:36:02 [INFO] __main__: 配置文件: d:\spoken\config.toml
+2026-04-17 22:36:02 [DEBUG] __main__: 当前配置（脱敏）: {'hotkey': {'record_mode': 'push_to_talk', 'toggle_record': 'alt+r', 'switch_mode': 'alt+m', 'interrupt': 'esc'}, 'asr': {'mode': 'realtime', 'realtime_provider': 'windows', 'preset': 'balanced', 'language': 'zh', 'device': 'cpu', 'download_mirrors': ['https://hf-mirror.com', 'https://www.modelscope.cn'], 'windows': {'language_tag': '', 'initial_silence_timeout_sec': 5.0, 'end_silence_timeout_sec': 0.8, 'auto_stop_silence_sec': 60.0}, 'xunfei': {'app_id': '9c9ecba8', 'api_key': '57cc***44a8', 'api_secret': 'ZjhiN2UxYmVlZDM0ZDlhMDRjNzlmZTM1', 'vad_eos_ms': 5000, 'startup_prebuffer_ms': 800}, 'hybrid': {'enabled': True, 'final_provider': 'faster_whisper', 'long_form_sec': 10, 'rerecognize_ai_modes': True}, 'sensevoice': {'model_name': 'iic/SenseVoiceSmall', 'vad_threshold': 0.5}}, 'injection': {'method': 'clipboard', 'focus_delay_ms': 20, 'char_delay_ms': 0, 'batch_size': 120, 'batch_delay_ms': 0, 'clipboard_force_apps': ['code.exe', 'notion.exe', 'lark.exe', 'feishu.exe', 'obsidian.exe', 'cursor.exe', 'windsurf.exe']}, 'audio': {'sample_rate': 16000, 'channels': 1, 'sample_width': 2, 'chunk_size': 1024, 'silence_timeout_sec': 0, 'backend': 'pyaudio', 'device_index': -1}, 'ai': {'enabled': True, 'base_url': 'https://api.minimaxi.com/v1', 'api_key': '', 'model': 'MiniMax-M2.5-highspeed', 'timeout_sec': 15, 'max_tokens': 512}, 'mode': {'default': 'B', 'prompts': {'B': '', 'C': ''}}, 'tray': {'show_mode_indicator': True, 'done_flash_ms': 1500}, 'log': {'level': 'INFO', 'file': '%APPDATA%\\Spoken\\spoken.log', 'max_size_mb': 10, 'backup_count': 3}}
+2026-04-17 22:36:02 [INFO] __main__: 初始模式: B
+2026-04-17 22:36:02 [INFO] __main__: 尝试 Windows 原生语音识别...
+2026-04-17 22:36:04 [INFO] spoken.asr.windows_speech: WindowsSpeechEngine 加载完成
+2026-04-17 22:36:04 [INFO] __main__: [OK] 主引擎就绪: Windows 原生语音识别
+2026-04-17 22:36:04 [INFO] __main__: 录音器已初始化
+2026-04-17 22:36:04 [INFO] __main__: 文本注入器已初始化（方案: clipboard）
+2026-04-17 22:36:04 [INFO] __main__: AI 启动摘要: enabled=True, key_source=environment (SPOKEN_AI_API_KEY), model=MiniMax-M2.5-highspeed, base_url=https://api.minimaxi.com/v1, default_mode=B
+2026-04-17 22:36:04 [INFO] __main__: AI 处理器已初始化: AIProcessor(model='MiniMax-M2.5-highspeed', base_url='https://api.minimaxi.com/v1', timeout=15.0s)
+2026-04-17 22:36:04 [INFO] __main__: 处理流水线已构建（模式: realtime）
+2026-04-17 22:36:04 [DEBUG] spoken.hotkey.manager: PTT 热键初始化: 主键=r, 修饰键=['alt']
+2026-04-17 22:36:04 [DEBUG] spoken.hotkey.manager: 已注册热键: alt+m
+2026-04-17 22:36:04 [DEBUG] spoken.hotkey.manager: 已注册热键: esc
+2026-04-17 22:36:09 [INFO] spoken.hotkey.manager: 热键监听已启动，共注册 2 个热键 + 1 个原始 hook
+2026-04-17 22:36:09 [INFO] __main__: 热键已注册: 录音(按住说话)=alt+r, 切换模式=alt+m, 中断=esc
+2026-04-17 22:36:09 [INFO] spoken.tray.icon: 托盘图标已启动（Apple HIG 圆形图标）
+2026-04-17 22:36:09 [INFO] __main__: 系统托盘图标已启动
+2026-04-17 22:36:09 [INFO] __main__: 浮窗对象已创建，将在主线程启动 WebView2
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing AvifImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing BlpImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing BmpImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing BufrStubImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing CurImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing DcxImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing DdsImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing EpsImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing FitsImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing FliImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing FpxImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Image: failed to import FpxImagePlugin: No module named 'olefile'
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing FtexImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing GbrImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing GifImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing GribStubImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing Hdf5StubImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing IcnsImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing IcoImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing ImImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing ImtImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing IptcImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing JpegImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing Jpeg2KImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing McIdasImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing MicImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Image: failed to import MicImagePlugin: No module named 'olefile'
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing MpegImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing MpoImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing MspImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PalmImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PcdImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PcxImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PdfImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PixarImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PngImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PpmImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing PsdImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing QoiImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing SgiImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing SpiderImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing SunImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing TgaImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing TiffImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing WebPImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing WmfImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing XbmImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing XpmImagePlugin
+2026-04-17 22:36:10 [DEBUG] PIL.Image: Importing XVThumbImagePlugin
+2026-04-17 22:36:11 [INFO] spoken.audio.devices: PyAudio 枚举到 9 个输入设备
+2026-04-17 22:36:11 [WARNING] __main__: 启动自检发现 1 个问题:
+2026-04-17 22:36:11 [WARNING] __main__:   [WARN] 未以管理员权限运行（向提权窗口注入可能失败）
+2026-04-17 22:36:11 [INFO] __main__: Spoken 初始化完成，等待热键触发...
+2026-04-17 22:36:11 [INFO] __main__: Spoken 运行中: 按住 alt+r 说话，松开停止并注入
+2026-04-17 22:36:12 [WARNING] spoken.overlay.window: 当前 pywebview 不支持 always_on_top，将用 Win32 置顶兜底

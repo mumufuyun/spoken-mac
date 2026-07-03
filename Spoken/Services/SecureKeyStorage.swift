@@ -9,6 +9,7 @@ class SecureKeyStorage {
     private let legacyAccount = "minimax_api_key"
     private let account = "llm_api_key"
     private let speechAccount = "speech_api_key"
+    private let speechBackupKey = "speech_api_key_backup"
     
     private init() {}
     
@@ -26,8 +27,13 @@ class SecureKeyStorage {
     }
     
     /// 读取语音识别 API Key
+    /// 由于 ad-hoc 签名每次构建会变化，Keychain 可能读取失败，因此同时维护 UserDefaults 备份
     func readSpeechAPIKey() -> String? {
-        return readKey(forAccount: speechAccount)
+        if let key = readKey(forAccount: speechAccount), !key.isEmpty {
+            return key
+        }
+        // Keychain 读取失败时，回退到 UserDefaults 备份
+        return UserDefaults.standard.string(forKey: speechBackupKey)
     }
     
     private func readKey(forAccount acc: String) -> String? {
@@ -57,7 +63,9 @@ class SecureKeyStorage {
     }
     
     /// 保存语音识别 API Key
+    /// 同时保存到 Keychain 和 UserDefaults 备份，避免 ad-hoc 签名变化导致读取失败
     func saveSpeechAPIKey(_ key: String) -> Bool {
+        UserDefaults.standard.set(key, forKey: speechBackupKey)
         return saveKey(key, forAccount: speechAccount)
     }
     

@@ -382,6 +382,7 @@ class SpeechService: NSObject, ObservableObject {
         // 监听连接状态变化，失败时通知 UI
         CloudSpeechService.shared.$connectionState
             .receive(on: DispatchQueue.main)
+            .removeDuplicates()
             .sink { [weak self] state in
                 if case .failed(let reason) = state {
                     self?.logWarn("Cloud connection failed: \(reason)")
@@ -390,7 +391,7 @@ class SpeechService: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
 
-        let modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "fun-asr-flash-8k-realtime"
+        let modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "qwen3-asr-flash-realtime"
         logInfo("connecting to cloud with model=\(modelName)")
 
         CloudSpeechService.shared.connect(

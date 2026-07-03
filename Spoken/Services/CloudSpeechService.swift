@@ -4,7 +4,8 @@ import os
 
 // MARK: - 文件日志工具
 
-/// 将日志写入 ~/Library/Logs/Spoken/spoken.log，支持按日期轮转（保留最近 7 天）
+/// 将日志写入 ~/Library/Application Support/com.moss.spoken/Logs/spoken.log
+/// 支持按日期轮转（保留最近 7 天）
 class FileLogger {
     static let shared = FileLogger()
 
@@ -15,14 +16,22 @@ class FileLogger {
     private let queue = DispatchQueue(label: "com.moss.spoken.filelogger", qos: .utility)
 
     private init() {
-        let home = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first!
-        logDirectory = home.appendingPathComponent("Logs/Spoken", isDirectory: true)
+        // 使用 Application Support 目录，避免 hardened runtime 限制
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.moss.spoken", isDirectory: true)
+        logDirectory = appSupport.appendingPathComponent("Logs", isDirectory: true)
         logFile = logDirectory.appendingPathComponent("spoken.log")
 
         dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
 
-        try? fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true, attributes: nil)
+        do {
+            try fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true, attributes: nil)
+            UnifiedLogger(subsystem: "com.moss.spoken", category: "FileLogger").info("Log directory: \(logDirectory.path)")
+        } catch {
+            UnifiedLogger(subsystem: "com.moss.spoken", category: "FileLogger").error("Failed to create log directory: \(error)")
+        }
+
         rotateIfNeeded()
     }
 
@@ -417,7 +426,9 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
 
     func connect(apiKey: String? = nil, model: String = "", onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
         let key = apiKey ?? SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
+        logInfo("connect: apiKey length=\(key.count), source=\(apiKey != nil ? "provided" : "keychain/defaults")")
         guard !key.isEmpty else {
+            logError("connect: API Key is empty")
             updateState(.failed("未配置 API Key"))
             onError(CloudSpeechError.missingAPIKey)
             return
@@ -460,6 +471,7 @@ class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
         request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
         request.timeoutInterval = timeoutInterval
 
+        logInfo("connect: creating WebSocket task to \(url)")
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: request)
         task.delegate = self

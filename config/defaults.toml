@@ -1,0 +1,194 @@
+# Spoken 默认配置文件
+# 用户配置请放在 %APPDATA%\Spoken\config.toml（会覆盖此处默认值）
+# 支持部分覆盖：只需写需要修改的字段
+
+# ═══════════════════════════════════════════════════════════════
+# 快捷键配置
+# ═══════════════════════════════════════════════════════════════
+[hotkey]
+# 录音模式：push_to_talk(按住说话) / toggle(按一次开始再按一次停止)
+record_mode = "toggle"
+# 录音热键（默认配合 push_to_talk 使用）
+# keyboard 库键名：分号键为 semicolon，故 alt+; 写作 alt+semicolon
+toggle_record = "alt+r"
+# AI 模式循环切换（A→B→C→D→E→F→A）
+switch_mode = "alt+m"
+# 中断 AI 处理（Esc 降级直接注入）
+interrupt = "esc"
+
+# ═══════════════════════════════════════════════════════════════
+# ASR 引擎配置
+# ═══════════════════════════════════════════════════════════════
+[asr]
+# ASR 识别模式（仅支持 realtime 流式识别）
+mode = "realtime"
+
+# 实时识别引擎选择
+# meituan = 美团内部 ASR 服务（需配置 app_key / app_secret）
+# xunfei  = 讯飞实时转写（云端 WebSocket，需配置密钥）
+# windows = Windows 原生 SpeechRecognizer（最接近 Win+H 的系统能力）
+realtime_provider = "xunfei"
+
+# 引擎降级顺序（逗号分隔），主引擎失败时按此顺序尝试
+fallback_order = "meituan, xunfei, windows"
+
+# 长语音阈值（秒），超过此时间视为长语音
+long_audio_threshold_sec = 60.0
+# 最大支持语音时长（秒）
+max_audio_duration_sec = 3600.0
+
+# 识别语言
+# zh  = 中文（已启用中英混合识别，可同时识别中英文）
+# en  = 纯英文
+# auto = 自动语种检测（讯飞不指定语言，Windows 使用系统默认）
+language = "zh"
+
+# ── Windows 原生语音识别配置（realtime_provider = "windows" 时生效）──
+[asr.windows]
+# 可选：留空时跟随 [asr].language；也可显式写成 zh-CN / en-US
+language_tag = ""
+# 起始静音超时：按下热键后一直不说话，多久算超时
+initial_silence_timeout_sec = 5.0
+# 句尾静音阈值：停顿多久后更容易切出结果
+end_silence_timeout_sec = 0.8
+# 连续识别会话自动结束前允许的静音时长
+auto_stop_silence_sec = 60.0
+
+# ── 美团内部 ASR 配置（realtime_provider = "meituan" 时生效）──
+[asr.meituan]
+# 美团 ASR 服务端点（WebSocket URL）
+endpoint = "wss://asr.sankuai.com/v1/realtime"
+# 应用密钥（可通过环境变量 MEITUAN_APP_KEY 设置）
+app_key = ""
+# 应用密钥（可通过环境变量 MEITUAN_APP_SECRET 设置）
+app_secret = ""
+# 最大支持时长（秒）
+max_duration_sec = 3600
+
+# ── 讯飞实时转写配置（realtime_provider = "xunfei" 时生效）──
+[asr.xunfei]
+# 讯飞开放平台：https://www.xfyun.cn/services/voicedictation
+# 注册后创建"实时语音转写"应用即可获取
+# 也可通过环境变量设置：XUNFEI_APP_ID / XUNFEI_API_KEY / XUNFEI_API_SECRET
+app_id = "9c9ecba8"
+api_key = "57cccdc5586f75f5974411544bfe44a8"
+api_secret = "ZjhiN2UxYmVlZDM0ZDlhMDRjNzlmZTM1"
+# 服务端静音判停阈值（毫秒）。句间停顿较多时建议调大。
+vad_eos_ms = 8000
+# 建连阶段保留的本地音频缓冲（毫秒），避免按下热键后首字丢失。
+startup_prebuffer_ms = 800
+
+# ═══════════════════════════════════════════════════════════════
+# 文本注入配置
+# ═══════════════════════════════════════════════════════════════
+[injection]
+# 注入方案：auto / sendinput / clipboard
+method = "auto"
+# 注入前等待焦点恢复的延迟（毫秒）
+focus_delay_ms = 20
+# SendInput 字符间延迟（毫秒），防止应用漏字
+char_delay_ms = 0
+# 超长文本分批大小（字符数），超过后自动分批注入
+batch_size = 120
+# 批间延迟（毫秒）
+batch_delay_ms = 0
+# 注入目标窗口策略：
+# - smart: 默认，若录音后焦点仍在同一应用/进程，则跟随当前焦点
+# - locked_on_start: 始终注入录音开始时捕获的窗口
+# - current: 始终优先注入当前前台窗口
+target_window = "smart"
+# 需要强制走剪贴板方案的进程名（Electron 应用等）
+clipboard_force_apps = [
+    "code.exe",
+    "notion.exe",
+    "lark.exe",
+    "feishu.exe",
+    "obsidian.exe",
+    "cursor.exe",
+    "windsurf.exe",
+]
+
+# ═══════════════════════════════════════════════════════════════
+# 音频采集配置
+# ═══════════════════════════════════════════════════════════════
+[audio]
+# 采样率（语音识别标准 16000Hz）
+sample_rate = 16000
+# 声道数（单声道）
+channels = 1
+# 采样精度（16bit）
+sample_width = 2
+# 每次读取的帧数（影响延迟）
+chunk_size = 1024
+# 静音检测：超过此时长（秒）无声音则自动停止录音（0=禁用）
+silence_timeout_sec = 0
+# 使用的音频后端：pyaudio / sounddevice
+backend = "pyaudio"
+# 指定麦克风设备索引（-1=系统默认）
+device_index = -1
+
+# ═══════════════════════════════════════════════════════════════
+# AI 润色配置
+# ═══════════════════════════════════════════════════════════════
+[ai]
+# 是否启用 AI 润色
+enabled = true
+# OpenAI 兼容接口地址
+# 公司 Friday 平台: https://aigc.sankuai.com/v1/openai/native
+# 外部 MiniMax:    https://api.minimaxi.com/v1
+base_url = "https://aigc.sankuai.com/v1/openai/native"
+# API Key（留空则从环境变量 SPOKEN_AI_API_KEY 读取）
+# Friday 平台请填入你的 AppID
+api_key = "22046856405852057673"
+# 使用的模型
+# 推荐模型：
+#   gpt-4o-mini（性价比高，润色/翻译/摘要完全够用，价格不到 4o 的 1/10）
+#   gpt-4o（质量更高，适合对输出要求严格的场景）
+#   LongCat-Flash-Omni-2603（公司自研，成本最低，数据不出司）
+model = "gpt-4o-mini"
+# 请求超时（秒），超时后自动降级 Mode A 直接注入
+timeout_sec = 15
+
+# ═══════════════════════════════════════════════════════════════
+# 工作模式
+# ═══════════════════════════════════════════════════════════════
+[mode]
+# 默认模式：A / B / C / D / E / F
+# A = 直接注入（无 AI，零延迟）
+# B = 润色优化（修正语法/标点/错别字）
+# C = 转 Prompt（将口语转为结构化 AI 指令）
+# D = 翻译英文（默认输出自然英文）
+# E = 摘要总结（输出一小段精炼摘要）
+# F = 结构化纪要（主题/事项/待办/时间）
+default = "B"
+
+# 自定义 System Prompt（留空则使用内置默认）
+[mode.prompts]
+B = ""
+C = ""
+D = ""
+E = ""
+F = ""
+
+# ═══════════════════════════════════════════════════════════════
+# 系统托盘
+# ═══════════════════════════════════════════════════════════════
+[tray]
+# 是否在托盘图标上显示当前模式（A/B/C）
+show_mode_indicator = true
+# 注入完成后绿色状态保持时长（毫秒），之后恢复就绪状态
+done_flash_ms = 1500
+
+# ═══════════════════════════════════════════════════════════════
+# 日志配置
+# ═══════════════════════════════════════════════════════════════
+[log]
+# 日志级别：DEBUG / INFO / WARNING / ERROR
+level = "INFO"
+# 日志文件路径（留空则仅输出到控制台）
+# 支持 %APPDATA% 等环境变量展开
+file = "%APPDATA%\\Spoken\\spoken.log"
+# 单个日志文件最大体积（MB）
+max_size_mb = 10
+# 保留的历史日志文件数
+backup_count = 3
