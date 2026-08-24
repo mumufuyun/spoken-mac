@@ -1,6 +1,6 @@
 # Spoken 进度
 
-> Last updated: 2026-08-24
+> Last updated: 2026-08-25
 
 Spoken 已收敛为 macOS 原生菜单栏应用，Windows/Python 版本已移除。
 
@@ -13,7 +13,7 @@ Spoken 已收敛为 macOS 原生菜单栏应用，Windows/Python 版本已移除
 | 输出语言 | 已实施 | 与场景解耦，支持原语言/英/日/韩 |
 | 场景建议 | 已实施 | 根据聚焦 App 建议，不覆盖用户选择 |
 | 稳定性指标 | 已实施 | 只保存计数，设置页展示完成率 |
-| 自动化测试 | 已建立 | 19 项测试，真实接口评测默认跳过 |
+| 自动化测试 | 已建立 | 22 项测试，真实接口评测默认跳过 |
 
 ## 本轮阶段
 
@@ -21,8 +21,9 @@ Spoken 已收敛为 macOS 原生菜单栏应用，Windows/Python 版本已移除
 2. 从 AI 动作转为真实使用场景：已实施，包含旧设置迁移。
 3. 可观测性与验证：指标、场景建议、测试目标和手工 soak 方案已建立。
 4. AI 后处理回归：完成 9 段样本 × 6 种模式的 54 次真实请求，详见 [SPOKEN_AI_MODE_REGRESSION_2026-08-24.md](SPOKEN_AI_MODE_REGRESSION_2026-08-24.md)。
+5. 全链路延迟优化：完成 ASR 预连接复用、音频首包提速、网络恢复及 AI 推理参数优化，详见 [SPOKEN_LATENCY_OPTIMIZATION_2026-08-25.md](SPOKEN_LATENCY_OPTIMIZATION_2026-08-25.md)。
 
-当前发布版本：2.0.9（build 209）。
+当前发布版本：2.0.10（build 210）。
 
 ## 待真机验证
 

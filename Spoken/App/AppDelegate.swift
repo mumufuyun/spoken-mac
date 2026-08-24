@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Network
 
 extension Notification.Name {
     static let spokenPopoverResize = Notification.Name("com.moss.Spoken.popoverResize")
@@ -47,13 +48,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingViewModel = RecordingViewModel()
     private var frontmostAppBeforeHotKey: NSRunningApplication?
     private let stateManager = StateManager.shared
+    private let networkMonitor = NWPathMonitor()
+    private let networkMonitorQueue = DispatchQueue(label: "com.moss.spoken.network-monitor")
+    private var networkSignature: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupPopover()
         setupHotKey()
         registerSleepWakeObservers()
+        startNetworkMonitoring()
         checkPermissions()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            SpeechService.shared.prepareCloudConnection()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        networkMonitor.cancel()
+        CloudSpeechService.shared.disconnect()
     }
 
     // MARK: - Status Item
@@ -158,7 +171,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in
             print("Spoken: [DEBUG] System did wake, resetting cloud speech connection")
             CloudSpeechService.shared.disconnect()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                SpeechService.shared.prepareCloudConnection()
+            }
         }
+    }
+
+    private func startNetworkMonitoring() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let interfaceTypes: [NWInterface.InterfaceType] = [
+                .wifi, .wiredEthernet, .cellular, .loopback, .other
+            ]
+            let activeInterfaces = interfaceTypes
+                .filter(path.usesInterfaceType)
+                .map { String(describing: $0) }
+                .joined(separator: ",")
+            let signature = "\(String(describing: path.status))|\(activeInterfaces)"
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let previous = self.networkSignature
+                self.networkSignature = signature
+                guard let previous, previous != signature else { return }
+                guard self.stateManager.currentState != .recording,
+                      self.stateManager.currentState != .starting,
+                      self.stateManager.currentState != .cloudRecognizing else {
+                    print("Spoken: [DEBUG] Network path changed during recording; provider retry policy remains active")
+                    return
+                }
+                print("Spoken: [DEBUG] Network path changed, rebuilding cloud speech warm connection")
+                CloudSpeechService.shared.disconnect()
+                if path.status == .satisfied {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        SpeechService.shared.prepareCloudConnection()
+                    }
+                }
+            }
+        }
+        networkMonitor.start(queue: networkMonitorQueue)
     }
 
     private func handleHotKey() {
@@ -174,6 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        PipelineLatencyMetrics.shared.begin()
         SpeechService.shared.prepareCloudConnection()
         showRecordingPanel()
     }
@@ -216,6 +266,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let strongSelf = self else { return }
             strongSelf.hotKeyService.stopEscapeMonitoring()
             strongSelf.stateManager.transition(to: .idle)
+            PipelineLatencyMetrics.shared.abandon()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 strongSelf.recordingPanel?.orderOut(nil)
                 strongSelf.recordingPanel = nil
@@ -238,8 +289,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.recordingPanel = panel
         hotKeyService.startEscapeMonitoring()
         panel.orderFront(nil)
+        PipelineLatencyMetrics.shared.mark(.panelShown)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        DispatchQueue.main.async {
             viewModel.startRecording()
         }
     }
@@ -249,6 +301,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func performTextInjection(text: String, targetApp: NSRunningApplication?) {
         print("Spoken: [DEBUG] performTextInjection - text length: \(text.count)")
         stateManager.transition(to: .injecting)
+        PipelineLatencyMetrics.shared.mark(.injectionStarted)
 
         recordingPanel?.orderOut(nil)
 
@@ -259,8 +312,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             print("Spoken: [WARN] No target app found")
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.executeInjection(text: text, targetApp: targetApp)
+        waitForTargetAndInject(
+            text: text,
+            targetApp: targetApp,
+            deadline: ProcessInfo.processInfo.systemUptime + 0.8
+        )
+    }
+
+    private func waitForTargetAndInject(
+        text: String,
+        targetApp: NSRunningApplication?,
+        deadline: TimeInterval
+    ) {
+        let targetIsReady = targetApp.map {
+            !$0.isTerminated
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.processIdentifier
+        } ?? true
+        if targetIsReady || ProcessInfo.processInfo.systemUptime >= deadline {
+            executeInjection(text: text, targetApp: targetApp)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.waitForTargetAndInject(text: text, targetApp: targetApp, deadline: deadline)
         }
     }
 
@@ -274,6 +347,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(text, forType: .string)
+            PipelineLatencyMetrics.shared.finish()
             cleanupAfterInjection()
             return
         }
@@ -288,6 +362,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pb.setString(text, forType: .string)
         }
 
+        PipelineLatencyMetrics.shared.finish()
         cleanupAfterInjection()
     }
 
@@ -386,6 +461,7 @@ class RecordingViewModel: ObservableObject {
         lastRecognizedText = ""
         statusText = "正在聆听..."
         displayStatus = SpokenMode.load().rawValue
+        PipelineLatencyMetrics.shared.mark(.recordingStarted)
 
         stateManager.transition(to: .recording)
 
@@ -477,6 +553,7 @@ class RecordingViewModel: ObservableObject {
         isRecording = false
         isCloudRecognizing = false
         isProcessing = false
+        PipelineLatencyMetrics.shared.abandon()
 
         onCancel?()
     }
@@ -507,6 +584,7 @@ class RecordingViewModel: ObservableObject {
             print("Spoken: [WARN] processAndInput: empty text received")
             isProcessing = false
             stateManager.transition(to: .idle)
+            PipelineLatencyMetrics.shared.abandon()
             return
         }
 

@@ -818,6 +818,7 @@ struct SpeechConfigSectionView: View {
     @State private var modelName: String = ""
     @State private var saved: Bool = false
     @State private var metrics = ASRStabilityMetrics.shared.snapshot()
+    @State private var latencyMetrics = PipelineLatencyMetrics.shared.distributions()
 
     private let textPrimary = Color(hex: "#000000")
     private let textMuted = Color(hex: "#777169")
@@ -910,6 +911,7 @@ struct SpeechConfigSectionView: View {
                             Spacer()
                             Button("刷新") {
                                 metrics = ASRStabilityMetrics.shared.snapshot()
+                                latencyMetrics = PipelineLatencyMetrics.shared.distributions()
                             }
                             .buttonStyle(.plain)
                             .font(.system(size: 10))
@@ -922,6 +924,13 @@ struct SpeechConfigSectionView: View {
                             Text(String(format: "云端完成率 %.1f%%", metrics.successRate * 100))
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(metrics.successRate >= 0.995 ? .green : .orange)
+                        }
+                        if !latencyMetrics.isEmpty {
+                            Divider()
+                            latencyRow("首字", key: "hotkey_to_first_text")
+                            latencyRow("ASR收尾", key: "stop_to_asr_final")
+                            latencyRow("AI处理", key: "ai_request_to_complete")
+                            latencyRow("结束到写入", key: "stop_to_injection")
                         }
                         Text("仅保存在本机，不记录音频和转录正文。")
                             .font(.system(size: 10))
@@ -961,7 +970,21 @@ struct SpeechConfigSectionView: View {
         .onAppear {
             loadConfig()
             metrics = ASRStabilityMetrics.shared.snapshot()
+            latencyMetrics = PipelineLatencyMetrics.shared.distributions()
         }
+    }
+
+    @ViewBuilder
+    private func latencyRow(_ label: String, key: String) -> some View {
+        if let distribution = latencyMetrics[key] {
+            Text("\(label) P50 \(milliseconds(distribution.p50))ms · P90 \(milliseconds(distribution.p90))ms · P95 \(milliseconds(distribution.p95))ms · n=\(distribution.count)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(textMuted)
+        }
+    }
+
+    private func milliseconds(_ seconds: Double) -> Int {
+        Int((seconds * 1_000).rounded())
     }
 
     private func availableCloudProviders() -> [(id: String, name: String)] {

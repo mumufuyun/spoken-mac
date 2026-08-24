@@ -112,10 +112,14 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         return activeSessionID == id && acceptsSessionAudio
     }
 
-    private func markAudioReceived(for id: UUID) {
+    @discardableResult
+    private func markAudioReceived(for id: UUID) -> Bool {
         sessionLock.lock()
+        let isFirstFrame = activeSessionID == id && !sessionAudioReceived
         if activeSessionID == id { sessionAudioReceived = true }
         sessionLock.unlock()
+        if isFirstFrame { PipelineLatencyMetrics.shared.mark(.firstAudioFrame) }
+        return isFirstFrame
     }
 
     private func hasReceivedAudio(for id: UUID) -> Bool {
@@ -305,11 +309,10 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     /// 重建音频引擎，用于长时间不活动后引擎内部状态失效的场景
     private func resetAudioEngine() {
-        safeRemoveTap(onBus: 0)
-        usleep(100_000) // 等待旧 tap 完全清理
         if audioEngine.isRunning {
             audioEngine.stop()
         }
+        safeRemoveTap(onBus: 0)
         audioEngine.reset()
     }
 
@@ -321,7 +324,6 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             audioEngine.stop()
         }
         audioEngine = AVAudioEngine()
-        usleep(200_000) // 给新引擎初始化时间
         logInfo("AVAudioEngine rebuilt")
     }
 
@@ -470,7 +472,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                                           channels: 1,
                                           interleaved: true)
         var tapFormat: AVAudioFormat? = speechFormat
-        var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+        var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: tapFormat) { [weak self] buffer, _ in
             guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
             self.markAudioReceived(for: sessionID)
             guard self.isUsingCloud else { return }
@@ -483,7 +485,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             logWarn("cloud installTap with 16kHz format failed, converting hardware format explicitly")
             tapFormat = nil
             if let converter = StreamingASRPCMConverter(inputFormat: recordingFormat) {
-                tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+                tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
                     guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
                     self.markAudioReceived(for: sessionID)
                     guard self.isUsingCloud, let pcmData = converter.convert(buffer) else { return }
@@ -513,6 +515,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         do {
             try audioEngine.start()
             logInfo("audioEngine started")
+            PipelineLatencyMetrics.shared.mark(.audioEngineStarted)
         } catch {
             logError("Audio engine failed to start: \(error)")
             CloudSpeechService.shared.disconnect()
@@ -526,7 +529,6 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             return
         }
 
-        usleep(200_000)
         state = .recording
         logInfo("state changed to recording")
 
@@ -583,7 +585,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                                               channels: 1,
                                               interleaved: true)
             var tapFormat: AVAudioFormat? = speechFormat
-            var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+            var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: tapFormat) { [weak self] buffer, _ in
                 guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
                 recognitionRequest.append(buffer)
                 self.markAudioReceived(for: sessionID)
@@ -592,7 +594,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             if !tapInstalled, speechFormat != nil {
                 logWarn("installTap with 16kHz format failed, falling back to hardware native format")
                 tapFormat = nil
-                tapInstalled = safeInstallTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+                tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
                     guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
                     recognitionRequest.append(buffer)
                     self.markAudioReceived(for: sessionID)
@@ -613,14 +615,12 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             audioEngine.prepare()
             do {
                 try audioEngine.start()
+                PipelineLatencyMetrics.shared.mark(.audioEngineStarted)
             } catch {
                 logError("Audio engine failed to start: \(error)")
                 failStart("音频引擎启动失败", sessionID: sessionID)
                 return
             }
-
-            // 给系统时间初始化音频管道
-            usleep(200_000)
 
             self.state = .recording
 
@@ -688,6 +688,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         if !text.isEmpty {
             lastRecognizedText = text
             logInfo("partial result length=\(text.count)")
+            PipelineLatencyMetrics.shared.mark(.firstASRPartial)
             capturedOnPartial?(text)
         }
         if result.isFinal {
@@ -704,6 +705,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         guard state == .recording else { return }
         guard !isStopping else { return }
         guard let sessionID = currentSessionID() else { return }
+        PipelineLatencyMetrics.shared.mark(.stopRequested)
         stopAcceptingAudio(for: sessionID)
         state = .stopping
 
@@ -731,6 +733,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             text.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         logInfo("stopAndFinish: finalTextLength=\(processed.count)")
+        PipelineLatencyMetrics.shared.mark(.asrFinal)
         cleanupResources()
         state = .idle
         lastRecordingEndTime = Date()

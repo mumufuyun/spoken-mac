@@ -27,6 +27,24 @@ enum CloudRecognitionResultResolver {
     }
 }
 
+struct WarmConnectionReusePolicy {
+    static func canReuse(
+        age: TimeInterval,
+        maxAge: TimeInterval,
+        sameAPIKey: Bool,
+        sameModel: Bool,
+        hasTransport: Bool,
+        hasMissedHeartbeat: Bool
+    ) -> Bool {
+        age >= 0
+            && age <= maxAge
+            && sameAPIKey
+            && sameModel
+            && hasTransport
+            && !hasMissedHeartbeat
+    }
+}
+
 /// 每次录音使用一个独立的逻辑会话。所有状态都在 stateQueue 上修改，避免音频线程、
 /// URLSession delegate 和主线程同时改写连接状态。
 final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecked Sendable {
@@ -51,6 +69,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private let retryDelays: [TimeInterval] = [0.3, 0.8]
     private let connectTimeout: TimeInterval = 5
     private let finishTimeout: TimeInterval = 8
+    private let warmConnectionTTL: TimeInterval = 180
 
     private var apiKey = ""
     private var model = ""
@@ -71,6 +90,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private var finishTimeoutItem: DispatchWorkItem?
     private var heartbeatTimer: DispatchSourceTimer?
     private var missedPongs = 0
+    private var warmExpiryItem: DispatchWorkItem?
+    private var connectionStartedAt: TimeInterval?
+    private var isWarmTransport = false
+    private var hasPublishedFirstPartial = false
 
     private var partialCallback: ((String) -> Void)?
     private var finalCallback: ((String) -> Void)?
@@ -116,6 +139,29 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
                 return
             }
 
+            if self.canAdoptWarmConnection(apiKey: resolvedKey, model: resolvedModel) {
+                self.cancelWarmExpiry()
+                self.isWarmTransport = false
+                self.partialCallback = onPartial
+                self.finalCallback = onFinal
+                self.errorCallback = onError
+                self.accumulatedText = ""
+                self.replayBuffer.removeAll(keepingCapacity: true)
+                self.pendingAudioBuffers.removeAll(keepingCapacity: true)
+                self.finishRequested = false
+                self.commitSent = false
+                self.hasPublishedFirstPartial = false
+                ASRStabilityMetrics.shared.recordSessionStarted()
+                Self.logger.info("session=\(self.shortSessionID) adopted warm connection ready=\(self.sessionReady)")
+                if self.sessionReady {
+                    ASRStabilityMetrics.shared.recordConnected()
+                    PipelineLatencyMetrics.shared.mark(.asrConnected)
+                    let callback = self.stateCallback
+                    DispatchQueue.main.async { callback?(.connected) }
+                }
+                return
+            }
+
             self.closeTransport(clearBusinessState: true, notifyDisconnected: false)
             self.sessionID = UUID()
             self.apiKey = resolvedKey
@@ -130,6 +176,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             self.finishRequested = false
             self.commitSent = false
             self.intentionallyClosing = false
+            self.connectionStartedAt = ProcessInfo.processInfo.systemUptime
+            self.isWarmTransport = false
+            self.hasPublishedFirstPartial = false
 
             Self.logger.info("session=\(self.shortSessionID) starting fresh connection")
             ASRStabilityMetrics.shared.recordSessionStarted()
@@ -137,12 +186,42 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         }
     }
 
-    /// 预连接不再长期持有 WebSocket。录音开始时创建新会话，并用本地音频缓存吸收建连延迟。
     func preconnect() {
-        Self.logger.info("preconnect skipped: fresh session strategy enabled")
+        let resolvedKey = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
+        let resolvedModel = UserDefaults.standard.string(forKey: "speech_model_name")
+            ?? "qwen3-asr-flash-realtime"
+        guard !resolvedKey.isEmpty else { return }
+
+        stateQueue.async {
+            if self.canAdoptWarmConnection(apiKey: resolvedKey, model: resolvedModel) {
+                Self.logger.info("session=\(self.shortSessionID) preconnect reused existing warm transport")
+                return
+            }
+
+            self.closeTransport(clearBusinessState: true, notifyDisconnected: false)
+            self.sessionID = UUID()
+            self.apiKey = resolvedKey
+            self.model = resolvedModel
+            self.retryCount = 0
+            self.finishRequested = false
+            self.commitSent = false
+            self.intentionallyClosing = false
+            self.connectionStartedAt = ProcessInfo.processInfo.systemUptime
+            self.isWarmTransport = true
+            self.hasPublishedFirstPartial = false
+            Self.logger.info("session=\(self.shortSessionID) starting bounded warm connection ttl=\(Int(self.warmConnectionTTL))s")
+            self.startConnectionAttempt()
+            self.scheduleWarmExpiry()
+        }
     }
 
-    func cancelPreconnect() {}
+    func cancelPreconnect() {
+        stateQueue.async {
+            guard self.isWarmTransport else { return }
+            self.closeTransport(clearBusinessState: true, notifyDisconnected: false)
+            self.updateState(.idle)
+        }
+    }
 
     func sendAudio(_ data: Data) {
         guard !data.isEmpty else { return }
@@ -274,6 +353,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         assertOnStateQueue()
         cancelConnectTimeout()
         cancelFinishTimeout()
+        cancelWarmExpiry()
         stopHeartbeat()
 
         let task = webSocketTask
@@ -296,6 +376,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             finishRequested = false
             apiKey = ""
             model = ""
+            connectionStartedAt = nil
+            isWarmTransport = false
+            hasPublishedFirstPartial = false
         }
 
         if notifyDisconnected {
@@ -360,6 +443,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             "type": "input_audio_buffer.commit"
         ]
         Self.logger.info("session=\(shortSessionID) sending commit")
+        PipelineLatencyMetrics.shared.mark(.asrCommitSent)
         sendJSON(event, task: task) { [weak self] error in
             guard let self, let error else { return }
             self.retryOrFail(error, failedTask: task)
@@ -424,7 +508,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             cancelConnectTimeout()
             retryCount = 0
             updateState(.connected)
-            ASRStabilityMetrics.shared.recordConnected()
+            if !isWarmTransport {
+                ASRStabilityMetrics.shared.recordConnected()
+                PipelineLatencyMetrics.shared.mark(.asrConnected)
+            }
             flushPendingAudio()
             if finishRequested { sendCommit(task: task) }
 
@@ -465,6 +552,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         assertOnStateQueue()
         guard !text.isEmpty else { return }
         accumulatedText = text
+        if !hasPublishedFirstPartial {
+            hasPublishedFirstPartial = true
+            PipelineLatencyMetrics.shared.mark(.firstASRPartial)
+        }
         let callback = partialCallback
         DispatchQueue.main.async { callback?(text) }
     }
@@ -525,6 +616,40 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private func cancelFinishTimeout() {
         finishTimeoutItem?.cancel()
         finishTimeoutItem = nil
+    }
+
+    private func canAdoptWarmConnection(apiKey: String, model: String) -> Bool {
+        assertOnStateQueue()
+        guard let connectionStartedAt else { return false }
+        let age = ProcessInfo.processInfo.systemUptime - connectionStartedAt
+        return isWarmTransport && WarmConnectionReusePolicy.canReuse(
+            age: age,
+            maxAge: warmConnectionTTL,
+            sameAPIKey: self.apiKey == apiKey,
+            sameModel: self.model == model,
+            hasTransport: webSocketTask != nil,
+            hasMissedHeartbeat: missedPongs > 0
+        )
+    }
+
+    private func scheduleWarmExpiry() {
+        cancelWarmExpiry()
+        let expectedSessionID = sessionID
+        let item = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.sessionID == expectedSessionID,
+                  self.isWarmTransport else { return }
+            Self.logger.info("session=\(self.shortSessionID) warm connection expired")
+            self.closeTransport(clearBusinessState: true, notifyDisconnected: false)
+            self.updateState(.idle)
+        }
+        warmExpiryItem = item
+        stateQueue.asyncAfter(deadline: .now() + warmConnectionTTL, execute: item)
+    }
+
+    private func cancelWarmExpiry() {
+        warmExpiryItem?.cancel()
+        warmExpiryItem = nil
     }
 
     private func startHeartbeat(task: URLSessionWebSocketTask) {

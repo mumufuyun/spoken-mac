@@ -60,4 +60,53 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertEqual(SpeechPostProcessor.postProcess(text), text)
         XCTAssertEqual(SpeechPostProcessor.postProcess("这个八哥要调用阿皮哎"), "这个bug要调用API")
     }
+
+    func testWarmConnectionIsReusedOnlyWhileFreshAndHealthy() {
+        XCTAssertTrue(WarmConnectionReusePolicy.canReuse(
+            age: 30,
+            maxAge: 180,
+            sameAPIKey: true,
+            sameModel: true,
+            hasTransport: true,
+            hasMissedHeartbeat: false
+        ))
+        XCTAssertFalse(WarmConnectionReusePolicy.canReuse(
+            age: 181,
+            maxAge: 180,
+            sameAPIKey: true,
+            sameModel: true,
+            hasTransport: true,
+            hasMissedHeartbeat: false
+        ))
+        XCTAssertFalse(WarmConnectionReusePolicy.canReuse(
+            age: 30,
+            maxAge: 180,
+            sameAPIKey: true,
+            sameModel: true,
+            hasTransport: true,
+            hasMissedHeartbeat: true
+        ))
+    }
+
+    func testLatencyDistributionUsesNearestRankPercentiles() {
+        let distribution = PipelineLatencyMetrics.distribution([0.1, 0.2, 0.3, 0.4, 0.5])
+        XCTAssertEqual(distribution.count, 5)
+        XCTAssertEqual(distribution.p50, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(distribution.p90, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(distribution.p95, 0.5, accuracy: 0.0001)
+    }
+
+    func testDeepSeekDashScopeRequestsDisableThinking() {
+        XCTAssertTrue(MiniMaxService.shouldDisableThinking(
+            model: "deepseek-v4-flash-0731",
+            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ))
+        XCTAssertFalse(MiniMaxService.shouldDisableThinking(
+            model: "MiniMax-M2.5",
+            baseURL: "https://api.minimax.chat/v1"
+        ))
+        XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 20), 256)
+        XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 2_000), 4_128)
+        XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 20_000), 16_384)
+    }
 }

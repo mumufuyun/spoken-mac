@@ -352,7 +352,18 @@ final class CloudSpeechService: NSObject, @unchecked Sendable {
             completion(nil)
             return
         }
-        provider.finish(completion: completion)
+        provider.finish { [weak self] text in
+            completion(text)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                guard let self else { return }
+                let raw = UserDefaults.standard.string(forKey: "speechRecognitionProvider")
+                    ?? SpeechRecognitionProvider.local.rawValue
+                let recognitionProvider = SpeechRecognitionProvider(rawValue: raw) ?? .local
+                if recognitionProvider == .cloud || recognitionProvider == .auto {
+                    self.preconnect()
+                }
+            }
+        }
     }
 
     func disconnect() {

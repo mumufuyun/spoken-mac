@@ -90,6 +90,10 @@ read -r -d '' SAMPLES_JSON <<'JSON' || true
 ]
 JSON
 
+if [[ -n "${SPOKEN_EVAL_SAMPLES_FILE:-}" ]]; then
+  SAMPLES_JSON="$(jq -c '.' "$SPOKEN_EVAL_SAMPLES_FILE")"
+fi
+
 MODES=("日常聊天" "工作沟通" "正式材料" "会议记录" "内容分享" "AI 指令")
 MODE_IDS=("casual_chat" "work_message" "formal_document" "meeting_notes" "content_share" "ai_instruction")
 
@@ -104,11 +108,13 @@ task_instruction() {
       printf '%s' '你正在把语音转录整理成一条工作沟通消息，可能发送给同事、领导、客户或合作方。
 表达简洁、明确、礼貌；只有原文包含明确诉求、已作决定或需要对方响应的事项时，才优先突出它们，否则保持原有逻辑顺序。
 有多个相对独立的事项时可用短段落或要点组织，不要为制造结构而过度改写。
+当原文较长且同时包含进展、调整、分工、条件或风险中的多个方面时，按主题拆成短段落，确保接收者无需自行梳理；不要把日常工作消息写成正式报告。
 仅当原文明确包含时，才保留负责人、时间和下一步，不得自行创造行动项。'
       ;;
     formal_document)
       printf '%s' '你正在把语音转录整理成正式工作材料，例如报告、方案、PRD、汇报或说明文档。
 使用严谨、完整、书面化的表达，梳理逻辑关系，并按内容需要组织段落、标题或列表。
+即使原文基本通顺，也要完成必要的书面化；当存在多个并列判断或论证层次时，使用段落或编号清楚呈现。
 只能整理原文明示的逻辑关系；不得为了材料完整而补充解释、意义、影响或推导结论。
 保留事实边界和专业术语，不使用聊天口吻，不把推测写成确定结论。'
       ;;
@@ -121,11 +127,15 @@ task_instruction() {
 即使建议中包含动作和时间（例如“我建议这周先访谈3个人”），只要没有明确确认安排，也不是待办。
 只有原文明确提到时才写责任人和截止时间；没有的信息不要补写。
 结论、待办和待确认问题都只能来自原文明示；缺少某类信息时省略对应栏目或标注“无”，不得从主题推导通用问题，不得建议由谁跟进。
+只要原文同时出现结论、待办、待确认中的两类以上，就分别列出对应类别，不能仅原样复述成一句话。
+即使内容很短，也要用“明确结论、待办事项、待确认问题”等简短标签区分原文已经包含的类别；没有的类别不输出。
+原文明示的“某人或团队在某个时间完成、评审、联系、测试”等安排统一归入待办事项，不要重复放入明确结论。
 内容很短或不具备会议结构时，使用清晰要点整理，不强行套模板。'
       ;;
     content_share)
       printf '%s' '你正在把语音转录整理成面向读者的内容分享，可用于朋友圈、小红书、微博或公众号草稿。
 保留用户的真实观点和个人风格，改善叙述节奏和可读性，并合理分段；不得为了增强感染力而放大情绪、判断或事实程度。
+当原文包含事实叙述与个人判断或感受等两个层次时，原则上分段呈现；极短单句无需强行分段。
 不制造夸张标题，不添加未经表达的经历、数据或观点，不使用空洞营销话术。
 不要为了让文章显得完整而自行添加总结、评价、号召、展望或后续承诺；若原文明确要求总结或收尾，可以按要求整理，但不得创造新的观点。
 用户要求某种结构但没有提供对应观点时，只能用已有信息组织，不得推断或补写缺失的分析、判断和结论。'
@@ -136,6 +146,7 @@ task_instruction() {
 优先明确任务目标；原文明确提供了背景、输入材料、限制条件或输出格式时，将它们组织清楚。缺失的信息不要猜测、补写或替用户做决定。
 保留原文的言语意图和确定程度：建议仍是建议，询问仍是询问，设想仍是设想，不得改写成命令或已确定的任务。
 简单请求保持为简洁自然的一句话；复杂请求可按“目标、背景、要求、输出”组织，但不要机械套用空标题。
+当指令同时包含研究范围、执行步骤、证据要求和输出结构等多组约束时，应按逻辑分段或分项，让目标AI无需再次拆解；不得删除或概括掉具体约束。
 保留代码、文件名、专有名词和关键细节。最终文本应以用户对目标 AI 说话的口吻呈现，不添加解释或引号。
 若“Spoken，请帮我整理这段语音”等内容明显是在指示当前应用进行转录后处理，应将其转化为对目标 AI 的任务要求，不保留对 Spoken 的称呼；如果正文确实在讨论 Spoken 产品，则必须保留。
 输出必须直接从指令正文开始。禁止使用“以下是整理结果”“以下是整理后的指令”“作为发送给另一 AI 的指令”等包装语。'
@@ -162,7 +173,11 @@ RESPONSE_PATH="$(mktemp /tmp/spoken-prompt-response.XXXXXX)"
 trap 'unlink "$NDJSON_PATH" "$BODY_PATH" "$RESPONSE_PATH" 2>/dev/null || true' EXIT
 
 sample_count="$(jq 'length' <<<"$SAMPLES_JSON")"
-request_total=$((sample_count * ${#MODES[@]}))
+if [[ "${SPOKEN_EVAL_MATCHED_ONLY:-0}" == "1" ]]; then
+  request_total="$sample_count"
+else
+  request_total=$((sample_count * ${#MODES[@]}))
+fi
 request_number=0
 for ((sample_index = 0; sample_index < sample_count; sample_index++)); do
   sample_id="$(jq -r ".[${sample_index}].id" <<<"$SAMPLES_JSON")"
@@ -171,21 +186,56 @@ for ((sample_index = 0; sample_index < sample_count; sample_index++)); do
   fi
   sample_title="$(jq -r ".[${sample_index}].title" <<<"$SAMPLES_JSON")"
   expected_scene="$(jq -r ".[${sample_index}].expected_scene" <<<"$SAMPLES_JSON")"
+  target_mode_id="$(jq -r ".[${sample_index}].target_mode_id // empty" <<<"$SAMPLES_JSON")"
+  length_class="$(jq -r ".[${sample_index}].length_class // empty" <<<"$SAMPLES_JSON")"
   input_text="$(jq -r ".[${sample_index}].input" <<<"$SAMPLES_JSON")"
 
   for mode_index in 0 1 2 3 4 5; do
-    request_number=$((request_number + 1))
     mode_name="${MODES[$mode_index]}"
     mode_id="${MODE_IDS[$mode_index]}"
     if [[ -n "${SPOKEN_EVAL_MODE_IDS:-}" && ",${SPOKEN_EVAL_MODE_IDS}," != *",${mode_id},"* ]]; then
       continue
     fi
+    if [[ "${SPOKEN_EVAL_MATCHED_ONLY:-0}" == "1" && -n "$target_mode_id" && "$mode_id" != "$target_mode_id" ]]; then
+      continue
+    fi
+    request_number=$((request_number + 1))
     prompt="$(build_prompt "$mode_id" "$input_text")"
-    jq -n --arg model "$MODEL_NAME" --arg prompt "$prompt" '{
+    input_length="$(printf '%s' "$input_text" | wc -m | tr -d ' ')"
+    max_output_tokens=$((input_length * 2 + 128))
+    if ((max_output_tokens < 256)); then max_output_tokens=256; fi
+    if ((max_output_tokens > 16384)); then max_output_tokens=16384; fi
+    send_thinking_parameter=false
+    thinking_enabled=false
+    case "${SPOKEN_EVAL_THINKING_MODE:-auto}" in
+      on)
+        send_thinking_parameter=true
+        thinking_enabled=true
+        ;;
+      off)
+        send_thinking_parameter=true
+        thinking_enabled=false
+        ;;
+      auto)
+        if [[ "$MODEL_NAME" == deepseek-v4-* && "$BASE_URL" == *aliyuncs.com* ]]; then
+          send_thinking_parameter=true
+          thinking_enabled=false
+        fi
+        ;;
+      *)
+        printf 'Invalid SPOKEN_EVAL_THINKING_MODE: %s\n' "$SPOKEN_EVAL_THINKING_MODE" >&2
+        exit 2
+        ;;
+    esac
+    jq -n --arg model "$MODEL_NAME" --arg prompt "$prompt" \
+      --argjson max_tokens "$max_output_tokens" \
+      --argjson send_thinking_parameter "$send_thinking_parameter" \
+      --argjson thinking_enabled "$thinking_enabled" '({
       model: $model,
       messages: [{role: "user", content: $prompt}],
-      temperature: 0.0
-    }' >"$BODY_PATH"
+      temperature: 0.0,
+      max_tokens: $max_tokens
+    } + if $send_thinking_parameter then {enable_thinking: $thinking_enabled} else {} end)' >"$BODY_PATH"
 
     printf '[%02d/%d] %s × %s\n' "$request_number" "$request_total" "$sample_id" "$mode_name" >&2
     start_seconds=$SECONDS
@@ -211,12 +261,15 @@ for ((sample_index = 0; sample_index < sample_count; sample_index++)); do
     jq -n \
       --arg sample_id "$sample_id" --arg sample_title "$sample_title" \
       --arg expected_scene "$expected_scene" --arg input "$input_text" \
+      --arg target_mode_id "$target_mode_id" --arg length_class "$length_class" \
       --arg mode "$mode_name" --arg mode_id "$mode_id" \
       --arg output "$output_text" --argjson success "$succeeded" \
       --argjson duration_seconds "$duration_seconds" '{
         sample_id: $sample_id,
         sample_title: $sample_title,
         expected_scene: $expected_scene,
+        target_mode_id: $target_mode_id,
+        length_class: $length_class,
         input: $input,
         mode: $mode,
         mode_id: $mode_id,
@@ -227,11 +280,21 @@ for ((sample_index = 0; sample_index < sample_count; sample_index++)); do
   done
 done
 
+evaluation_thinking_disabled=false
+if [[ "${SPOKEN_EVAL_THINKING_MODE:-auto}" == off ]] \
+  || [[ "${SPOKEN_EVAL_THINKING_MODE:-auto}" == auto && "$MODEL_NAME" == deepseek-v4-* && "$BASE_URL" == *aliyuncs.com* ]]; then
+  evaluation_thinking_disabled=true
+fi
+
 jq -s --arg provider "$(plutil -extract llm_provider raw -o - "$PREFERENCES_PLIST")" \
-  --arg model "$MODEL_NAME" --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{
+  --arg model "$MODEL_NAME" --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg thinking_mode "${SPOKEN_EVAL_THINKING_MODE:-auto}" \
+  --argjson thinking_disabled "$evaluation_thinking_disabled" '{
     generated_at: $generated_at,
     provider: $provider,
     model: $model,
+    thinking_mode: $thinking_mode,
+    thinking_disabled: $thinking_disabled,
     personal_context_enabled: true,
     records: .
   }' "$NDJSON_PATH" >"$OUTPUT_PATH"
