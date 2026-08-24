@@ -22,7 +22,23 @@
 		F1A2B3C4D5E6F78901234567 /* AudioConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D3F4A5B6C7D8E901234567 /* AudioConverter.swift */; };
 		00C9269B3E9B42FEAD7A0CA1 /* ObjCExceptionCatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */; };
 		74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = 4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */; };
+		A5A5A5A5A5A5A5A5A5A5A501 /* ReliableQwenSpeechProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A5A5A5A5A5A5A5A5A5A511 /* ReliableQwenSpeechProvider.swift */; };
+		A5A5A5A5A5A5A5A5A5A5A502 /* ASRStabilityMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A5A5A5A5A5A5A5A5A5A512 /* ASRStabilityMetrics.swift */; };
+		A5A5A5A5A5A5A5A5A5A5A503 /* WritingScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A5A5A5A5A5A5A5A5A5A513 /* WritingScene.swift */; };
+		A6A6A6A6A6A6A6A6A6A6A601 /* WritingSceneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A6A6A6A6A6A6A6A6A6A611 /* WritingSceneTests.swift */; };
+		A6A6A6A6A6A6A6A6A6A6A602 /* CloudSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A6A6A6A6A6A6A6A6A6A612 /* CloudSessionTests.swift */; };
+		A6A6A6A6A6A6A6A6A6A6A603 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6A6A6A6A6A6A6A6A6A6A613 /* XCTest.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A6A6A6A6A6A6A6A6A6A6A650 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F5DCD7FE19877DC13B2624BB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2E3DEA84ECAA7F6C844FAFFA;
+			remoteInfo = Spoken;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		2FA57F0A31DC35BC7A615EA5 /* Spoken.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Spoken.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -43,8 +59,26 @@
 		E2D3F4A5B6C7D8E901234567 /* AudioConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConverter.swift; sourceTree = "<group>"; };
 		B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
 4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptionCatcher.m; sourceTree = "<group>"; };
-1CC5ED6598304C359F6F90E6 /* Spoken-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Spoken-Bridging-Header.h"; sourceTree = "<group>"; };
+		1CC5ED6598304C359F6F90E6 /* Spoken-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Spoken-Bridging-Header.h"; sourceTree = "<group>"; };
+		A5A5A5A5A5A5A5A5A5A5A511 /* ReliableQwenSpeechProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliableQwenSpeechProvider.swift; sourceTree = "<group>"; };
+		A5A5A5A5A5A5A5A5A5A5A512 /* ASRStabilityMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ASRStabilityMetrics.swift; sourceTree = "<group>"; };
+		A5A5A5A5A5A5A5A5A5A5A513 /* WritingScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingScene.swift; sourceTree = "<group>"; };
+		A6A6A6A6A6A6A6A6A6A6A610 /* SpokenTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpokenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A6A6A6A6A6A6A6A6A6A6A611 /* WritingSceneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingSceneTests.swift; sourceTree = "<group>"; };
+		A6A6A6A6A6A6A6A6A6A6A612 /* CloudSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSessionTests.swift; sourceTree = "<group>"; };
+		A6A6A6A6A6A6A6A6A6A6A613 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A6A6A6A6A6A6A6A6A6A6A620 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A6A6A6A6A6A6A6A6A6A6A603 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		1B8A6F544698795D23DDDFE2 /* Services */ = {
@@ -59,6 +93,8 @@
 				EAA5F4DA72A994327C1E9C2B /* SpeechService.swift */,
 				68F1A0BF6250444B989D2A10 /* SpeechPostProcessor.swift */,
 				B2C3D4E5F6A7890123456789 /* CloudSpeechService.swift */,
+				A5A5A5A5A5A5A5A5A5A5A511 /* ReliableQwenSpeechProvider.swift */,
+				A5A5A5A5A5A5A5A5A5A5A512 /* ASRStabilityMetrics.swift */,
 				E2D3F4A5B6C7D8E901234567 /* AudioConverter.swift */,
 				B0906CE58D6A2E7E468BD0BA /* TextInjectionEngine.swift */,
 			);
@@ -79,6 +115,7 @@
 			isa = PBXGroup;
 			children = (
 				2FA57F0A31DC35BC7A615EA5 /* Spoken.app */,
+				A6A6A6A6A6A6A6A6A6A6A610 /* SpokenTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -87,6 +124,8 @@
 			isa = PBXGroup;
 			children = (
 				B243910291B46417F289FFCC /* Spoken */,
+				A6A6A6A6A6A6A6A6A6A6A630 /* SpokenTests */,
+				A6A6A6A6A6A6A6A6A6A6A631 /* Frameworks */,
 				8925AE968B99902E31F11BA0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -124,8 +163,26 @@
 		F5DCD5DBCD37A93D4DB53B72 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				A5A5A5A5A5A5A5A5A5A5A513 /* WritingScene.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		A6A6A6A6A6A6A6A6A6A6A630 /* SpokenTests */ = {
+			isa = PBXGroup;
+			children = (
+				A6A6A6A6A6A6A6A6A6A6A611 /* WritingSceneTests.swift */,
+				A6A6A6A6A6A6A6A6A6A6A612 /* CloudSessionTests.swift */,
+			);
+			path = SpokenTests;
+			sourceTree = "<group>";
+		};
+		A6A6A6A6A6A6A6A6A6A6A631 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A6A6A6A6A6A6A6A6A6A6A613 /* XCTest.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -149,6 +206,23 @@
 			productReference = 2FA57F0A31DC35BC7A615EA5 /* Spoken.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A6A6A6A6A6A6A6A6A6A6A640 /* SpokenTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A6A6A6A6A6A6A6A6A6A6A670 /* Build configuration list for PBXNativeTarget "SpokenTests" */;
+			buildPhases = (
+				A6A6A6A6A6A6A6A6A6A6A621 /* Sources */,
+				A6A6A6A6A6A6A6A6A6A6A620 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A6A6A6A6A6A6A6A6A6A6A651 /* PBXTargetDependency */,
+			);
+			name = SpokenTests;
+			productName = SpokenTests;
+			productReference = A6A6A6A6A6A6A6A6A6A6A610 /* SpokenTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -161,6 +235,10 @@
 					2E3DEA84ECAA7F6C844FAFFA = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Manual;
+					};
+					A6A6A6A6A6A6A6A6A6A6A640 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = 2E3DEA84ECAA7F6C844FAFFA;
 					};
 				};
 			};
@@ -179,6 +257,7 @@
 			projectRoot = "";
 			targets = (
 				2E3DEA84ECAA7F6C844FAFFA /* Spoken */,
+				A6A6A6A6A6A6A6A6A6A6A640 /* SpokenTests */,
 			);
 		};
 /* End PBXProject section */
@@ -209,13 +288,33 @@
 				3C3E852B2628FB4D473E2221 /* SpeechService.swift in Sources */,
 				DDBCCCB4172846FE9663FF08 /* SpeechPostProcessor.swift in Sources */,
 				A1B2C3D4E5F6789012345678 /* CloudSpeechService.swift in Sources */,
+				A5A5A5A5A5A5A5A5A5A5A501 /* ReliableQwenSpeechProvider.swift in Sources */,
+				A5A5A5A5A5A5A5A5A5A5A502 /* ASRStabilityMetrics.swift in Sources */,
+				A5A5A5A5A5A5A5A5A5A5A503 /* WritingScene.swift in Sources */,
 				F1A2B3C4D5E6F78901234567 /* AudioConverter.swift in Sources */,
 				8E780E11AB623869A3F7ACB2 /* TextInjectionEngine.swift in Sources */,
 				863C055EDBACD95ECEB8F0C5 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A6A6A6A6A6A6A6A6A6A6A621 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A6A6A6A6A6A6A6A6A6A6A601 /* WritingSceneTests.swift in Sources */,
+				A6A6A6A6A6A6A6A6A6A6A602 /* CloudSessionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A6A6A6A6A6A6A6A6A6A6A651 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2E3DEA84ECAA7F6C844FAFFA /* Spoken */;
+			targetProxy = A6A6A6A6A6A6A6A6A6A6A650 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		00223FBA628CD432E268407B /* Debug */ = {
@@ -254,7 +353,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 206;
+				CURRENT_PROJECT_VERSION = 209;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -275,7 +374,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.0.6;
+				MARKETING_VERSION = 2.0.9;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -338,7 +437,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 206;
+				CURRENT_PROJECT_VERSION = 209;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -353,7 +452,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.0.6;
+				MARKETING_VERSION = 2.0.9;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = Spoken;
@@ -379,6 +478,36 @@
 			};
 			name = Debug;
 		};
+		A6A6A6A6A6A6A6A6A6A6A660 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moss.spoken.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.9;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Spoken.app/Contents/MacOS/Spoken";
+			};
+			name = Debug;
+		};
+		A6A6A6A6A6A6A6A6A6A6A661 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.moss.spoken.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.9;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Spoken.app/Contents/MacOS/Spoken";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -396,6 +525,15 @@
 			buildConfigurations = (
 				00223FBA628CD432E268407B /* Debug */,
 				0FB0372F7E0DCD69C5AC1CC4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A6A6A6A6A6A6A6A6A6A6A670 /* Build configuration list for PBXNativeTarget "SpokenTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A6A6A6A6A6A6A6A6A6A6A660 /* Debug */,
+				A6A6A6A6A6A6A6A6A6A6A661 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

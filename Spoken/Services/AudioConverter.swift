@@ -1,4 +1,72 @@
+@preconcurrency import AVFoundation
 import Foundation
+
+/// 将硬件原生音频流转换为云端 ASR 约定的 16 kHz / mono / Int16 PCM。
+/// 实例只能在创建它的单一音频 Tap 回调中使用。
+final class StreamingASRPCMConverter {
+    private final class InputFeeder: @unchecked Sendable {
+        let input: AVAudioPCMBuffer
+        private var supplied = false
+
+        init(input: AVAudioPCMBuffer) {
+            self.input = input
+        }
+
+        func next(status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+            guard !supplied else {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return input
+        }
+    }
+
+    static let outputFormat = AVAudioFormat(
+        commonFormat: .pcmFormatInt16,
+        sampleRate: 16_000,
+        channels: 1,
+        interleaved: true
+    )!
+
+    private let converter: AVAudioConverter
+    private let inputSampleRate: Double
+
+    init?(inputFormat: AVAudioFormat) {
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0,
+              let converter = AVAudioConverter(from: inputFormat, to: Self.outputFormat) else {
+            return nil
+        }
+        self.converter = converter
+        self.inputSampleRate = inputFormat.sampleRate
+    }
+
+    func convert(_ input: AVAudioPCMBuffer) -> Data? {
+        let ratio = Self.outputFormat.sampleRate / inputSampleRate
+        let capacity = AVAudioFrameCount(ceil(Double(input.frameLength) * ratio) + 32)
+        guard let output = AVAudioPCMBuffer(pcmFormat: Self.outputFormat, frameCapacity: capacity) else {
+            return nil
+        }
+
+        let feeder = InputFeeder(input: input)
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            feeder.next(status: inputStatus)
+        }
+
+        guard conversionError == nil, status != .error, output.frameLength > 0 else { return nil }
+        return Self.data(fromCanonicalBuffer: output)
+    }
+
+    static func data(fromCanonicalBuffer buffer: AVAudioPCMBuffer) -> Data? {
+        guard buffer.format.commonFormat == .pcmFormatInt16,
+              buffer.format.sampleRate == outputFormat.sampleRate,
+              buffer.format.channelCount == 1,
+              let pointer = buffer.int16ChannelData?.pointee else { return nil }
+        return Data(bytes: pointer, count: Int(buffer.frameLength) * MemoryLayout<Int16>.size)
+    }
+}
 
 /// 音频格式转换器
 /// 将 PCM 原始音频数据包装为标准 WAV 格式，适用于 DashScope 语音识别等场景

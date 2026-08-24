@@ -1,41 +1,9 @@
 import SwiftUI
 import CoreGraphics
 
-enum SpokenMode: String, CaseIterable {
-    case direct = "直接输入"
-    case polish = "润色"
-    case prompt = "Prompt"
-    case translate = "翻译"
-    case summarize = "摘要"
-    case format = "格式化"
-}
-
-enum TranslateLanguage: String, CaseIterable {
-    case english = "英文"
-    case japanese = "日文"
-    case korean = "韩文"
-}
-
-extension SpokenMode {
-    var promptUserDefaultsKey: String {
-        "prompt_custom_\(rawValue)"
-    }
-    
-    var settingsIcon: String {
-        switch self {
-        case .direct: return "text.bubble"
-        case .polish: return "wand.and.stars"
-        case .prompt: return "terminal"
-        case .translate: return "globe"
-        case .summarize: return "doc.text"
-        case .format: return "list.bullet"
-        }
-    }
-}
-
 struct ContentView: View {
-    @State private var mode: SpokenMode = .direct
-    @State private var translateLang: TranslateLanguage = .english
+    @State private var mode: SpokenMode = .workMessage
+    @State private var translateLang: TranslateLanguage = .original
     @State private var statusMessage = "语言是最好的输入"
     @State private var showSettings = false
 
@@ -92,48 +60,43 @@ struct ContentView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            // 模式切换 - 6模式分两行
+            // 使用场景 - 7 场景分两行
             VStack(spacing: 5) {
                 HStack(spacing: 5) {
-                    ForEach([SpokenMode.direct, .polish, .prompt], id: \.self) { m in
+                    ForEach([SpokenMode.rawTranscript, .casualChat, .workMessage, .aiInstruction], id: \.self) { m in
                         ModeButton(mode: m, current: $mode)
                     }
                 }
                 HStack(spacing: 5) {
-                    ForEach([SpokenMode.translate, .summarize, .format], id: \.self) { m in
+                    ForEach([SpokenMode.formalDocument, .meetingNotes, .contentShare], id: \.self) { m in
                         ModeButton(mode: m, current: $mode)
                     }
                 }
             }
             .padding(.horizontal, 12)
 
-            // 翻译语言选择（翻译模式下显示）
-            if mode == .translate {
-                HStack(spacing: 8) {
-                    Text("目标语言：")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(textMuted)
-                    ForEach(TranslateLanguage.allCases, id: \.self) { lang in
-                        Button(action: {
-                            translateLang = lang
-                            UserDefaults.standard.set(lang.rawValue, forKey: "translateLang")
-                            UserDefaults.standard.synchronize()
-                        }) {
-                            Text(lang.rawValue)
-                                .font(.system(size: 11, weight: translateLang == lang ? .medium : .regular))
-                                .foregroundColor(translateLang == lang ? .white : textSecondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(translateLang == lang ? accentBlue : Color(hex: "#f5f2ef"))
-                                .cornerRadius(9999)
-                        }
-                        .buttonStyle(.plain)
+            HStack(spacing: 5) {
+                Text("输出")
+                    .font(.system(size: 10))
+                    .foregroundColor(textMuted)
+                ForEach(TranslateLanguage.allCases, id: \.self) { lang in
+                    Button(action: {
+                        translateLang = lang
+                        UserDefaults.standard.set(lang.rawValue, forKey: "translateLang")
+                    }) {
+                        Text(lang.rawValue)
+                            .font(.system(size: 10, weight: translateLang == lang ? .semibold : .regular))
+                            .foregroundColor(translateLang == lang ? .white : textSecondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(translateLang == lang ? accentBlue : Color(hex: "#f5f2ef"))
+                            .cornerRadius(9999)
                     }
-                    Spacer()
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 7)
 
             Spacer().frame(height: 14)
 
@@ -149,20 +112,22 @@ struct ContentView: View {
 
             Spacer().frame(height: 12)
         }
-        .frame(width: 260, height: mode == .translate ? 200 : 170)
+        .frame(width: 300, height: 205)
         .background(
             Color.white
                 .shadow(color: Color(hex: "#4e3220").opacity(0.04), radius: 4, x: 0, y: 2)
                 .shadow(color: Color(hex: "#000000").opacity(0.02), radius: 1, x: 0, y: 0)
         )
         .onAppear {
-            let savedMode = UserDefaults.standard.string(forKey: "spokenMode")
-            if let rawValue = savedMode, let saved = SpokenMode(rawValue: rawValue) {
-                mode = saved
-            }
+            mode = SpokenMode.load()
             let savedLang = UserDefaults.standard.string(forKey: "translateLang")
             if let rawValue = savedLang, let saved = TranslateLanguage(rawValue: rawValue) {
                 translateLang = saved
+            }
+            if let app = NSWorkspace.shared.frontmostApplication,
+               let suggestion = SceneSuggestionEngine.suggest(for: app),
+               suggestion != mode {
+                statusMessage = "\(app.localizedName ?? "当前应用")建议使用「\(suggestion.rawValue)」"
             }
         }
     }
@@ -181,9 +146,7 @@ struct ModeButton: View {
     var body: some View {
         Button(action: {
             current = mode
-            UserDefaults.standard.set(mode.rawValue, forKey: "spokenMode")
-            UserDefaults.standard.synchronize()
-            print("Spoken: [DEBUG] ModeButton: saved mode = \(mode.rawValue)")
+            mode.save()
         }) {
             Text(mode.rawValue)
                 .font(.system(size: 11, weight: current == mode ? .semibold : .regular))
@@ -207,11 +170,13 @@ struct ModeButton: View {
 enum SettingsSection: String, CaseIterable, Identifiable {
     case modelConfig
     case speechConfig
-    case polish
-    case prompt
-    case translate
-    case summarize
-    case format
+    case personalContext
+    case casualChat
+    case workMessage
+    case formalDocument
+    case meetingNotes
+    case contentShare
+    case aiInstruction
 
     var id: Self { self }
 
@@ -219,11 +184,13 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .modelConfig: return "模型"
         case .speechConfig: return "语音"
-        case .polish: return "润色"
-        case .prompt: return "Prompt"
-        case .translate: return "翻译"
-        case .summarize: return "摘要"
-        case .format: return "格式化"
+        case .personalContext: return "背景"
+        case .casualChat: return "日常"
+        case .workMessage: return "工作"
+        case .formalDocument: return "材料"
+        case .meetingNotes: return "会议"
+        case .contentShare: return "分享"
+        case .aiInstruction: return "AI 指令"
         }
     }
 
@@ -231,22 +198,25 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .modelConfig: return "cpu"
         case .speechConfig: return "waveform"
-        case .polish: return "wand.and.stars"
-        case .prompt: return "terminal"
-        case .translate: return "globe"
-        case .summarize: return "doc.text"
-        case .format: return "list.bullet"
+        case .personalContext: return "person.text.rectangle"
+        case .casualChat: return SpokenMode.casualChat.settingsIcon
+        case .workMessage: return SpokenMode.workMessage.settingsIcon
+        case .formalDocument: return SpokenMode.formalDocument.settingsIcon
+        case .meetingNotes: return SpokenMode.meetingNotes.settingsIcon
+        case .contentShare: return SpokenMode.contentShare.settingsIcon
+        case .aiInstruction: return SpokenMode.aiInstruction.settingsIcon
         }
     }
 
     var toSpokenMode: SpokenMode? {
         switch self {
-        case .polish: return .polish
-        case .prompt: return .prompt
-        case .translate: return .translate
-        case .summarize: return .summarize
-        case .format: return .format
-        case .modelConfig, .speechConfig: return nil
+        case .casualChat: return .casualChat
+        case .workMessage: return .workMessage
+        case .formalDocument: return .formalDocument
+        case .meetingNotes: return .meetingNotes
+        case .contentShare: return .contentShare
+        case .aiInstruction: return .aiInstruction
+        case .modelConfig, .speechConfig, .personalContext: return nil
         }
     }
 }
@@ -256,6 +226,8 @@ struct SettingsView: View {
     @State private var selectedSection: SettingsSection = .modelConfig
     @State private var apiKey: String = ""
     @State private var promptText: String = ""
+    @State private var personalContextText: String = ""
+    @State private var personalContextEnabled = true
     @State private var saved = false
     @State private var revertedToDefault = false
     
@@ -289,12 +261,17 @@ struct SettingsView: View {
             // 分类切换按钮（pill 风格，对齐主应用）
             VStack(spacing: 5) {
                 HStack(spacing: 5) {
-                    ForEach([SettingsSection.modelConfig, .speechConfig, .polish], id: \.self) { section in
+                    ForEach([SettingsSection.modelConfig, .speechConfig, .personalContext], id: \.self) { section in
                         SettingsTabButton(section: section, current: $selectedSection)
                     }
                 }
                 HStack(spacing: 5) {
-                    ForEach([SettingsSection.prompt, .translate, .summarize, .format], id: \.self) { section in
+                    ForEach([SettingsSection.casualChat, .workMessage, .formalDocument, .meetingNotes], id: \.self) { section in
+                        SettingsTabButton(section: section, current: $selectedSection)
+                    }
+                }
+                HStack(spacing: 5) {
+                    ForEach([SettingsSection.contentShare, .aiInstruction], id: \.self) { section in
                         SettingsTabButton(section: section, current: $selectedSection)
                     }
                 }
@@ -316,6 +293,14 @@ struct SettingsView: View {
                     SpeechConfigSectionView()
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)
+                } else if selectedSection == .personalContext {
+                    PersonalContextSectionView(
+                        contextText: $personalContextText,
+                        isEnabled: $personalContextEnabled,
+                        saved: $saved
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                 } else {
                     PromptSectionView(
                         section: selectedSection,
@@ -346,20 +331,17 @@ struct SettingsView: View {
             apiKey = SecureKeyStorage.shared.readAPIKey() ?? ""
         case .speechConfig:
             break
-        case .polish, .prompt, .translate, .summarize, .format:
+        case .personalContext:
+            personalContextText = UserDefaults.standard.string(forKey: PersonalContextStore.contextKey) ?? ""
+            personalContextEnabled = UserDefaults.standard.object(forKey: PersonalContextStore.enabledKey) == nil
+                || UserDefaults.standard.bool(forKey: PersonalContextStore.enabledKey)
+        case .casualChat, .workMessage, .formalDocument, .meetingNotes, .contentShare, .aiInstruction:
             if let mode = section.toSpokenMode {
                 let custom = UserDefaults.standard.string(forKey: mode.promptUserDefaultsKey)
                 if let c = custom, !c.isEmpty {
                     promptText = c
                 } else {
-                    switch mode {
-                    case .polish: promptText = MiniMaxService.defaultPolishPrompt
-                    case .prompt: promptText = MiniMaxService.defaultPromptPrompt
-                    case .translate: promptText = MiniMaxService.defaultTranslatePrompt(langName: "英文")
-                    case .summarize: promptText = MiniMaxService.defaultSummarizePrompt
-                    case .format: promptText = MiniMaxService.defaultFormatPrompt
-                    default: promptText = ""
-                    }
+                    promptText = MiniMaxService.defaultPrompt(for: mode)
                 }
             }
         }
@@ -395,6 +377,85 @@ struct SettingsTabButton: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - 个人背景
+
+struct PersonalContextSectionView: View {
+    @Binding var contextText: String
+    @Binding var isEnabled: Bool
+    @Binding var saved: Bool
+
+    private let textPrimary = Color(hex: "#000000")
+    private let textMuted = Color(hex: "#777169")
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("个人背景")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(textPrimary)
+                Spacer()
+                Toggle("启用", isOn: $isEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+
+            Text("用于术语消歧和表达风格适配。启用后会随需要 AI 后处理的转录一起发送给当前模型服务商；原样转写不会发送。")
+                .font(.system(size: 10))
+                .foregroundColor(textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextEditor(text: $contextText)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(textPrimary)
+                .padding(8)
+                .background(Color(hex: "#faf8f6"))
+                .cornerRadius(6)
+                .environment(\.colorScheme, .light)
+
+            HStack {
+                Button("清空") {
+                    contextText = ""
+                    UserDefaults.standard.removeObject(forKey: PersonalContextStore.contextKey)
+                    saved = false
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color(hex: "#f5f2ef"))
+                .foregroundColor(textPrimary)
+                .cornerRadius(8)
+
+                Button("保存") {
+                    let value = contextText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if value.isEmpty {
+                        UserDefaults.standard.removeObject(forKey: PersonalContextStore.contextKey)
+                    } else {
+                        UserDefaults.standard.set(value, forKey: PersonalContextStore.contextKey)
+                    }
+                    UserDefaults.standard.set(isEnabled, forKey: PersonalContextStore.enabledKey)
+                    saved = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        saved = false
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color(hex: "#4a90d9"))
+                .foregroundColor(.white)
+                .cornerRadius(8)
+
+                Spacer()
+                if saved {
+                    Text("已保存 ✓")
+                        .font(.system(size: 11))
+                        .foregroundColor(.green)
+                }
+            }
+        }
     }
 }
 
@@ -452,7 +513,7 @@ struct ModelConfigSectionView: View {
                     TextField("https://api.example.com/v1", text: $baseURL)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
-                        .onChange(of: baseURL) { _ in
+                        .onChange(of: baseURL) { _, _ in
                             saveCurrentPresetConfig()
                         }
                 }
@@ -465,7 +526,7 @@ struct ModelConfigSectionView: View {
                     TextField("model-name", text: $modelName)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
-                        .onChange(of: modelName) { _ in
+                        .onChange(of: modelName) { _, _ in
                             saveCurrentPresetConfig()
                         }
                 }
@@ -475,7 +536,7 @@ struct ModelConfigSectionView: View {
                     Text("API Key")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(textPrimary)
-                    TextField("sk-...", text: $apiKey)
+                    SecureField("sk-...", text: $apiKey)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
                 }
@@ -756,6 +817,7 @@ struct SpeechConfigSectionView: View {
     @State private var apiKey: String = ""
     @State private var modelName: String = ""
     @State private var saved: Bool = false
+    @State private var metrics = ASRStabilityMetrics.shared.snapshot()
 
     private let textPrimary = Color(hex: "#000000")
     private let textMuted = Color(hex: "#777169")
@@ -836,10 +898,38 @@ struct SpeechConfigSectionView: View {
                         Text("API Key")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(textPrimary)
-                        TextField("sk-...", text: $apiKey)
+                        SecureField("sk-...", text: $apiKey)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 12))
                     }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("稳定性记录")
+                                .font(.system(size: 12, weight: .semibold))
+                            Spacer()
+                            Button("刷新") {
+                                metrics = ASRStabilityMetrics.shared.snapshot()
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(hex: "#4a90d9"))
+                        }
+                        Text("会话 \(metrics.sessions) · 成功 \(metrics.successes) · 失败 \(metrics.failures) · 重连 \(metrics.reconnects) · 本地降级 \(metrics.fallbacks)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(textMuted)
+                        if metrics.successes + metrics.failures > 0 {
+                            Text(String(format: "云端完成率 %.1f%%", metrics.successRate * 100))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(metrics.successRate >= 0.995 ? .green : .orange)
+                        }
+                        Text("仅保存在本机，不记录音频和转录正文。")
+                            .font(.system(size: 10))
+                            .foregroundColor(textMuted)
+                    }
+                    .padding(10)
+                    .background(Color(hex: "#f5f2ef"))
+                    .cornerRadius(8)
                 }
 
                 // 保存状态
@@ -870,6 +960,7 @@ struct SpeechConfigSectionView: View {
         }
         .onAppear {
             loadConfig()
+            metrics = ASRStabilityMetrics.shared.snapshot()
         }
     }
 
@@ -901,7 +992,7 @@ struct SpeechConfigSectionView: View {
         if !trimmedKey.isEmpty {
             _ = SecureKeyStorage.shared.saveSpeechAPIKey(trimmedKey)
         } else {
-            _ = SecureKeyStorage.shared.saveSpeechAPIKey("")
+            SecureKeyStorage.shared.deleteSpeechAPIKey()
         }
         let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         UserDefaults.standard.set(model.isEmpty ? defaultModelPlaceholder() : model, forKey: "speech_model_name")

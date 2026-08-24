@@ -2,14 +2,14 @@ import Foundation
 import Security
 
 /// 安全存储 API Key
-class SecureKeyStorage {
+final class SecureKeyStorage: @unchecked Sendable {
     static let shared = SecureKeyStorage()
     
     private let service = "com.moss.Spoken"
     private let legacyAccount = "minimax_api_key"
     private let account = "llm_api_key"
     private let speechAccount = "speech_api_key"
-    private let speechBackupKey = "speech_api_key_backup"
+    private let legacySpeechBackupKey = "speech_api_key_backup"
     
     private init() {}
     
@@ -26,14 +26,14 @@ class SecureKeyStorage {
         return nil
     }
     
-    /// 读取语音识别 API Key
-    /// 由于 ad-hoc 签名每次构建会变化，Keychain 可能读取失败，因此同时维护 UserDefaults 备份
+    /// 读取语音识别 API Key。密钥只保存在 Keychain。
     func readSpeechAPIKey() -> String? {
+        // 清理旧版曾经保存在 UserDefaults 中的明文备份。
+        UserDefaults.standard.removeObject(forKey: legacySpeechBackupKey)
         if let key = readKey(forAccount: speechAccount), !key.isEmpty {
             return key
         }
-        // Keychain 读取失败时，回退到 UserDefaults 备份
-        return UserDefaults.standard.string(forKey: speechBackupKey)
+        return nil
     }
     
     private func readKey(forAccount acc: String) -> String? {
@@ -63,10 +63,19 @@ class SecureKeyStorage {
     }
     
     /// 保存语音识别 API Key
-    /// 同时保存到 Keychain 和 UserDefaults 备份，避免 ad-hoc 签名变化导致读取失败
     func saveSpeechAPIKey(_ key: String) -> Bool {
-        UserDefaults.standard.set(key, forKey: speechBackupKey)
+        UserDefaults.standard.removeObject(forKey: legacySpeechBackupKey)
         return saveKey(key, forAccount: speechAccount)
+    }
+
+    func deleteSpeechAPIKey() {
+        UserDefaults.standard.removeObject(forKey: legacySpeechBackupKey)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: speechAccount
+        ]
+        SecItemDelete(query as CFDictionary)
     }
     
     private func saveKey(_ key: String, forAccount acc: String) -> Bool {

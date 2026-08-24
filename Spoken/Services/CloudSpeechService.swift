@@ -6,7 +6,7 @@ import os
 
 /// 将日志写入 ~/Library/Application Support/com.moss.spoken/Logs/spoken.log
 /// 支持按日期轮转（保留最近 7 天）
-class FileLogger {
+final class FileLogger: @unchecked Sendable {
     static let shared = FileLogger()
 
     private let logDirectory: URL
@@ -61,12 +61,14 @@ class FileLogger {
     var currentLogFilePath: String { logFile.path }
 
     func readRecentLogs(maxLines: Int = 200) -> String {
-        guard let data = try? Data(contentsOf: logFile),
-              let text = String(data: data, encoding: .utf8) else {
-            return ""
+        queue.sync {
+            guard let data = try? Data(contentsOf: logFile),
+                  let text = String(data: data, encoding: .utf8) else {
+                return ""
+            }
+            let lines = text.components(separatedBy: .newlines)
+            return lines.suffix(maxLines).joined(separator: "\n")
         }
-        let lines = text.components(separatedBy: .newlines)
-        return lines.suffix(maxLines).joined(separator: "\n")
     }
 
     private func rotateIfNeeded() {
@@ -117,7 +119,7 @@ class FileLogger {
 }
 
 /// 统一日志封装：同时写入 os.Logger 和本地文件
-struct UnifiedLogger {
+struct UnifiedLogger: Sendable {
     private let osLogger: os.Logger
     private let category: String
 
@@ -174,7 +176,7 @@ protocol CloudSpeechProvider: AnyObject {
 
     func connect(apiKey: String?, model: String, onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void)
     func sendAudio(_ data: Data)
-    func finish()
+    func finish(completion: @escaping (String?) -> Void)
     func disconnect()
     func preconnect()
     func cancelPreconnect()
@@ -182,7 +184,7 @@ protocol CloudSpeechProvider: AnyObject {
 
 // MARK: - Provider 注册表
 
-class CloudSpeechProviderRegistry {
+final class CloudSpeechProviderRegistry: @unchecked Sendable {
     static let shared = CloudSpeechProviderRegistry()
     private var providers: [String: CloudSpeechProvider] = [:]
     private let lock = NSLock()
@@ -247,14 +249,12 @@ enum CloudSpeechError: LocalizedError {
 // MARK: - CloudSpeechService 调度层
 
 /// 云端语音识别调度服务：管理 Provider 注册、状态监控、自检
-class CloudSpeechService: NSObject {
+final class CloudSpeechService: NSObject, @unchecked Sendable {
     static let shared = CloudSpeechService()
     private static let logger = UnifiedLogger(subsystem: "com.moss.spoken", category: "CloudSpeechService")
 
     private var currentProvider: CloudSpeechProvider?
-    private var onPartial: ((String) -> Void)?
-    private var onFinal: ((String) -> Void)?
-    private var onError: ((Error) -> Void)?
+    private let providerLock = NSLock()
     var onConnected: (() -> Void)?
 
     @Published private(set) var connectionState: CloudConnectionState = .idle
@@ -262,7 +262,7 @@ class CloudSpeechService: NSObject {
 
     private override init() {
         super.init()
-        CloudSpeechProviderRegistry.shared.register(QwenRealtimeSpeechProvider.shared)
+        CloudSpeechProviderRegistry.shared.register(ReliableQwenSpeechProvider.shared)
     }
 
     private func logInfo(_ msg: String) {
@@ -293,8 +293,20 @@ class CloudSpeechService: NSObject {
 
     private func bindProviderState(_ provider: CloudSpeechProvider) {
         provider.onConnectionStateChanged = { [weak self] state in
-            self?.connectionState = state
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.connectionState = state
+                if case .connected = state {
+                    self.onConnected?()
+                }
+            }
         }
+    }
+
+    private func lockedCurrentProvider() -> CloudSpeechProvider? {
+        providerLock.lock()
+        defer { providerLock.unlock() }
+        return currentProvider
     }
 
     func connect(apiKey: String? = nil, model: String = "", onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
@@ -303,43 +315,57 @@ class CloudSpeechService: NSObject {
             onError(CloudSpeechError.providerNotFound("default"))
             return
         }
-        if let current = currentProvider, current.providerId != provider.providerId {
+        if let current = lockedCurrentProvider(), current.providerId != provider.providerId {
             current.disconnect()
         }
+        providerLock.lock()
         currentProvider = provider
+        providerLock.unlock()
         bindProviderState(provider)
-        self.onPartial = onPartial
-        self.onFinal = onFinal
-        self.onError = onError
         provider.connect(apiKey: apiKey, model: model, onPartial: onPartial, onFinal: onFinal, onError: onError)
     }
 
     func preconnect() {
         guard let provider = resolveProvider() else { return }
-        if let current = currentProvider, current.providerId != provider.providerId {
+        if let current = lockedCurrentProvider(), current.providerId != provider.providerId {
             current.disconnect()
         }
+        providerLock.lock()
         currentProvider = provider
+        providerLock.unlock()
         bindProviderState(provider)
         provider.preconnect()
     }
 
     func sendAudio(_ data: Data) {
-        currentProvider?.sendAudio(data)
+        providerLock.lock()
+        let provider = currentProvider
+        providerLock.unlock()
+        provider?.sendAudio(data)
     }
 
-    func finish() {
-        currentProvider?.finish()
+    func finish(completion: @escaping (String?) -> Void) {
+        providerLock.lock()
+        let provider = currentProvider
+        providerLock.unlock()
+        guard let provider else {
+            completion(nil)
+            return
+        }
+        provider.finish(completion: completion)
     }
 
     func disconnect() {
-        currentProvider?.disconnect()
+        providerLock.lock()
+        let provider = currentProvider
         currentProvider = nil
+        providerLock.unlock()
+        provider?.disconnect()
         connectionState = .idle
     }
 
     func performHealthCheck() -> CloudHealthReport {
-        guard let provider = currentProvider ?? resolveProvider() else {
+        guard let provider = lockedCurrentProvider() ?? resolveProvider() else {
             let report = CloudHealthReport(providerId: "unknown", providerName: "未知", state: .failed("未配置"), isHealthy: false, details: "未配置云端识别 Provider")
             lastHealthReport = report
             return report
@@ -356,420 +382,12 @@ class CloudSpeechService: NSObject {
         return report
     }
 
-    var isReady: Bool { currentProvider?.isReady ?? false }
-    var currentProviderName: String { currentProvider?.displayName ?? resolveProvider()?.displayName ?? "未配置" }
+    var isReady: Bool { lockedCurrentProvider()?.isReady ?? false }
+    var currentProviderName: String { lockedCurrentProvider()?.displayName ?? resolveProvider()?.displayName ?? "未配置" }
 
     func availableProviders() -> [(id: String, name: String)] {
         return CloudSpeechProviderRegistry.shared.allProviders().map {
             (id: $0.providerId, name: $0.displayName)
-        }
-    }
-}
-
-// MARK: - Qwen Realtime Provider
-
-/// 千问云 (Qwen) Realtime 语音识别 Provider 实现
-/// 基于 OpenAI Realtime API 兼容协议
-class QwenRealtimeSpeechProvider: NSObject, CloudSpeechProvider {
-    static let shared = QwenRealtimeSpeechProvider()
-    private static let logger = UnifiedLogger(subsystem: "com.moss.spoken", category: "QwenRealtimeProvider")
-
-    let providerId = "qwen-realtime"
-    let displayName = "千问云 Realtime"
-
-    private var webSocketTask: URLSessionWebSocketTask?
-    private var onPartial: ((String) -> Void)?
-    private var onFinal: ((String) -> Void)?
-    private var onError: ((Error) -> Void)?
-    var onConnected: (() -> Void)?
-
-    private(set) var isWebSocketOpen = false
-    private var sessionCreated = false
-    private var sessionUpdateSent = false
-    private var effectiveModel: String = ""
-    private let timeoutInterval: TimeInterval = 30
-    private var timeoutWorkItem: DispatchWorkItem?
-    private var preconnectWorkItem: DispatchWorkItem?
-    private let preconnectTimeout: TimeInterval = 8
-    private var accumulatedText: String = ""
-
-    private var _connectionState: CloudConnectionState = .idle
-    private var _onConnectionStateChanged: ((CloudConnectionState) -> Void)?
-
-    var connectionState: CloudConnectionState { _connectionState }
-    var onConnectionStateChanged: ((CloudConnectionState) -> Void)? {
-        get { _onConnectionStateChanged }
-        set { _onConnectionStateChanged = newValue }
-    }
-
-    var isReady: Bool { isWebSocketOpen && sessionCreated }
-
-    private override init() { super.init() }
-
-    private func logInfo(_ msg: String) {
-        Self.logger.info(msg)
-    }
-    private func logWarn(_ msg: String) {
-        Self.logger.warning(msg)
-    }
-    private func logError(_ msg: String) {
-        Self.logger.error(msg)
-    }
-
-    private func updateState(_ newState: CloudConnectionState) {
-        guard _connectionState != newState else { return }
-        _connectionState = newState
-        DispatchQueue.main.async { [weak self] in
-            self?._onConnectionStateChanged?(newState)
-        }
-    }
-
-    func connect(apiKey: String? = nil, model: String = "", onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
-        let key = apiKey ?? SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
-        logInfo("connect: apiKey length=\(key.count), source=\(apiKey != nil ? "provided" : "keychain/defaults")")
-        guard !key.isEmpty else {
-            logError("connect: API Key is empty")
-            updateState(.failed("未配置 API Key"))
-            onError(CloudSpeechError.missingAPIKey)
-            return
-        }
-
-        self.onPartial = onPartial
-        self.onFinal = onFinal
-        self.onError = onError
-        self.accumulatedText = ""
-
-        let effectiveModel = model.isEmpty
-            ? (UserDefaults.standard.string(forKey: "speech_model_name") ?? "qwen3-asr-flash-realtime")
-            : model
-
-        logInfo("connect called, model=\(effectiveModel)")
-
-        if isWebSocketOpen, webSocketTask != nil {
-            cancelPreconnect()
-            self.effectiveModel = effectiveModel
-            if !sessionCreated, !sessionUpdateSent {
-                sendSessionUpdate()
-            } else if sessionCreated {
-                onConnected?()
-            }
-            return
-        }
-
-        disconnect()
-        updateState(.connecting)
-        self.effectiveModel = effectiveModel
-
-        let baseURL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-        guard let url = URL(string: "\(baseURL)?model=\(effectiveModel)") else {
-            updateState(.failed("无效的 URL"))
-            onError(CloudSpeechError.invalidURL)
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
-        request.timeoutInterval = timeoutInterval
-
-        logInfo("connect: creating WebSocket task to \(url)")
-        let session = URLSession(configuration: .default)
-        let task = session.webSocketTask(with: request)
-        task.delegate = self
-        self.webSocketTask = task
-        task.resume()
-        startTimeoutTimer()
-    }
-
-    func preconnect() {
-        cancelPreconnect()
-        let key = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
-        guard !key.isEmpty else {
-            updateState(.failed("未配置 API Key"))
-            return
-        }
-        let model = UserDefaults.standard.string(forKey: "speech_model_name") ?? "qwen3-asr-flash-realtime"
-        if isWebSocketOpen { return }
-
-        disconnect()
-        updateState(.connecting)
-        self.effectiveModel = model
-
-        let baseURL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-        guard let url = URL(string: "\(baseURL)?model=\(model)") else {
-            updateState(.failed("无效的 URL"))
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
-        request.timeoutInterval = timeoutInterval
-
-        logInfo("preconnect starting for model=\(model)...")
-        let session = URLSession(configuration: .default)
-        let task = session.webSocketTask(with: request)
-        task.delegate = self
-        self.webSocketTask = task
-        task.resume()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.updateState(.failed("连接超时"))
-            self?.disconnect()
-        }
-        preconnectWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + preconnectTimeout, execute: workItem)
-    }
-
-    func cancelPreconnect() {
-        preconnectWorkItem?.cancel()
-        preconnectWorkItem = nil
-    }
-
-    func sendAudio(_ data: Data) {
-        guard isWebSocketOpen, sessionCreated, let task = webSocketTask else {
-            logWarn("sendAudio ignored, open=\(isWebSocketOpen), session=\(sessionCreated)")
-            return
-        }
-
-        let encoded = data.base64EncodedString()
-        let event: [String: Any] = [
-            "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))",
-            "type": "input_audio_buffer.append",
-            "audio": encoded
-        ]
-
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: event)
-            guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
-            let message = URLSessionWebSocketTask.Message.string(jsonString)
-            task.send(message) { [weak self] error in
-                if let error = error {
-                    Self.logger.error("sendAudio failed: \(error.localizedDescription)")
-                    self?.handleError(error)
-                }
-            }
-        } catch {
-            logError("audio event encode failed: \(error)")
-            handleError(error)
-        }
-    }
-
-    func finish() {
-        guard isWebSocketOpen, let task = webSocketTask else {
-            logWarn("finish ignored, not connected")
-            return
-        }
-
-        let event: [String: Any] = [
-            "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))",
-            "type": "input_audio_buffer.commit"
-        ]
-
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: event)
-            guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
-            let message = URLSessionWebSocketTask.Message.string(jsonString)
-            logInfo("sending input_audio_buffer.commit")
-            task.send(message) { [weak self] error in
-                if let error = error { self?.handleError(error) }
-            }
-        } catch { handleError(error) }
-    }
-
-    func disconnect() {
-        logInfo("disconnect called")
-        cancelTimeoutTimer()
-        cancelPreconnect()
-        webSocketTask?.cancel(with: .normalClosure, reason: nil)
-        webSocketTask = nil
-        isWebSocketOpen = false
-        sessionCreated = false
-        sessionUpdateSent = false
-        accumulatedText = ""
-        onPartial = nil
-        onFinal = nil
-        onError = nil
-        onConnected = nil
-        effectiveModel = ""
-        updateState(.disconnected)
-    }
-
-    private func sendSessionUpdate() {
-        guard let task = webSocketTask else { return }
-
-        // 注意：turn_detection 必须完全省略，不能传 null，否则服务端会断开连接
-        let event: [String: Any] = [
-            "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))",
-            "type": "session.update",
-            "session": [
-                "modalities": ["text"],
-                "input_audio_format": "pcm",
-                "sample_rate": 16000,
-                "input_audio_transcription": [
-                    "language": "zh"
-                ]
-            ]
-        ]
-
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: event, options: .prettyPrinted)
-            guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
-            sessionUpdateSent = true
-            logInfo("sending session.update: \(jsonString)")
-            let message = URLSessionWebSocketTask.Message.string(jsonString)
-            task.send(message) { [weak self] error in
-                if let error = error {
-                    Self.logger.error("session.update send failed: \(error.localizedDescription)")
-                    self?.handleError(error)
-                } else {
-                    Self.logger.info("session.update sent successfully")
-                }
-            }
-        } catch { handleError(error) }
-    }
-
-    private func receiveMessage() {
-        webSocketTask?.receive { [weak self] result in
-            guard let self = self else { return }
-            switch result {
-            case .failure(let error):
-                Self.logger.error("WebSocket receive error: \(error.localizedDescription)")
-                self.handleError(error)
-            case .success(let message):
-                self.cancelTimeoutTimer()
-                self.handleMessage(message)
-                if self.isWebSocketOpen { self.receiveMessage() }
-            }
-        }
-    }
-
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
-        switch message {
-        case .string(let text):
-            logInfo("received: \(text)")
-            parseResponse(text)
-        case .data(let data):
-            if let text = String(data: data, encoding: .utf8) { parseResponse(text) }
-        @unknown default: break
-        }
-    }
-
-    private func parseResponse(_ text: String) {
-        guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-
-        guard let type = json["type"] as? String else { return }
-
-        switch type {
-        case "session.created":
-            sessionCreated = true
-            logInfo("session created")
-            onConnected?()
-
-        case "session.updated":
-            logInfo("session updated")
-
-        case "input_audio_buffer.committed":
-            logInfo("audio buffer committed")
-
-        case "conversation.item.input_audio_transcription.completed":
-            // 新格式: 直接包含 transcript 字段
-            if let transcript = json["transcript"] as? String, !transcript.isEmpty {
-                accumulatedText = accumulatedText.isEmpty ? transcript : accumulatedText + transcript
-                DispatchQueue.main.async { self.onPartial?(self.accumulatedText) }
-            }
-            // 旧格式: 嵌套在 item 中
-            else if let item = json["item"] as? [String: Any],
-                    let content = item["content"] as? [[String: Any]],
-                    let first = content.first,
-                    let transcript = first["transcript"] as? String, !transcript.isEmpty {
-                accumulatedText = accumulatedText.isEmpty ? transcript : accumulatedText + transcript
-                DispatchQueue.main.async { self.onPartial?(self.accumulatedText) }
-            }
-
-        case "conversation.item.input_audio_transcription.delta":
-            // 新格式
-            if let delta = json["delta"] as? String, !delta.isEmpty {
-                let displayText = accumulatedText.isEmpty ? delta : accumulatedText + delta
-                DispatchQueue.main.async { self.onPartial?(displayText) }
-            }
-            // 旧格式: 嵌套在 item 中
-            else if let item = json["item"] as? [String: Any],
-                    let content = item["content"] as? [[String: Any]],
-                    let first = content.first,
-                    let delta = first["delta"] as? String, !delta.isEmpty {
-                let displayText = accumulatedText.isEmpty ? delta : accumulatedText + delta
-                DispatchQueue.main.async { self.onPartial?(displayText) }
-            }
-
-        case "error":
-            let errorMsg = json["error"] as? [String: Any]
-            let message = errorMsg?["message"] as? String ?? "Unknown error"
-            let code = errorMsg?["code"] as? String ?? "unknown"
-            logError("API error: code=\(code), message=\(message)")
-            updateState(.failed("API 错误: \(message)"))
-            handleError(CloudSpeechError.apiError(message))
-
-        default:
-            logInfo("unhandled event type: \(type)")
-        }
-    }
-
-    private func handleError(_ error: Error) {
-        DispatchQueue.main.async { [weak self] in self?.onError?(error) }
-    }
-
-    private func startTimeoutTimer() {
-        cancelTimeoutTimer()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.updateState(.failed("连接超时"))
-            self?.handleError(CloudSpeechError.timeout)
-            self?.disconnect()
-        }
-        timeoutWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeoutInterval, execute: workItem)
-    }
-
-    private func cancelTimeoutTimer() {
-        timeoutWorkItem?.cancel()
-        timeoutWorkItem = nil
-    }
-}
-
-extension QwenRealtimeSpeechProvider: URLSessionWebSocketDelegate {
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol proto: String?) {
-        logInfo("WebSocket connected, protocol=\(proto ?? "nil")")
-        isWebSocketOpen = true
-        cancelTimeoutTimer()
-        cancelPreconnect()
-        updateState(.connected)
-        // 延迟发送 session.update，确保连接完全建立
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.sendSessionUpdate()
-            self?.receiveMessage()
-        }
-    }
-
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
-        logInfo("WebSocket closed: code=\(closeCode.rawValue), reason=\(reasonStr)")
-        isWebSocketOpen = false
-        sessionCreated = false
-        cancelTimeoutTimer()
-        updateState(.disconnected)
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error {
-            logError("WebSocket task error: \(error.localizedDescription)")
-            isWebSocketOpen = false
-            sessionCreated = false
-            cancelTimeoutTimer()
-            updateState(.failed("连接异常: \(error.localizedDescription)"))
-            handleError(error)
-        } else {
-            logInfo("WebSocket task completed without error")
         }
     }
 }

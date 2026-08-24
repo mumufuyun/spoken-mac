@@ -6,58 +6,48 @@ enum InjectionOutcome {
     case copiedToClipboard
 }
 
-final class TextInjectionEngine: @unchecked Sendable {
+@MainActor
+final class TextInjectionEngine {
 
     private struct ClipboardSnapshot {
-        static let safeTypes: [NSPasteboard.PasteboardType] = [
-            .string,
-            .URL,
-            .html,
-            NSPasteboard.PasteboardType("public.utf8-plain-text"),
-            NSPasteboard.PasteboardType("public.utf16-plain-text"),
-            NSPasteboard.PasteboardType("public.url"),
-        ]
-
         struct Item {
             let types: [NSPasteboard.PasteboardType]
             let data: [NSPasteboard.PasteboardType: Data]
         }
         let items: [Item]
-        let changeCount: Int
+        let wasEmpty: Bool
 
         static func capture() -> ClipboardSnapshot {
             let pb = NSPasteboard.general
-            let changeCount = pb.changeCount
-            let safeSet = Set(safeTypes.map(\.rawValue))
             var items: [Item] = []
             for pbItem in pb.pasteboardItems ?? [] {
-                let textTypes = pbItem.types.filter { safeSet.contains($0.rawValue) }
-                guard !textTypes.isEmpty else { continue }
                 var dataMap: [NSPasteboard.PasteboardType: Data] = [:]
-                for type in textTypes {
+                for type in pbItem.types {
                     if let data = pbItem.data(forType: type) {
                         dataMap[type] = data
                     }
                 }
-                items.append(Item(types: textTypes, data: dataMap))
+                guard !dataMap.isEmpty else { continue }
+                items.append(Item(types: pbItem.types, data: dataMap))
             }
-            return ClipboardSnapshot(items: items, changeCount: changeCount)
+            return ClipboardSnapshot(items: items, wasEmpty: (pb.pasteboardItems ?? []).isEmpty)
         }
 
         func restore(expectedChangeCount: Int) {
             let pb = NSPasteboard.general
-            guard !items.isEmpty else { return }
             guard pb.changeCount == expectedChangeCount else { return }
             pb.clearContents()
-            for item in items {
+            guard !wasEmpty else { return }
+            let restoredItems: [NSPasteboardItem] = items.map { item in
                 let pbItem = NSPasteboardItem()
                 for type in item.types {
                     if let data = item.data[type] {
                         pbItem.setData(data, forType: type)
                     }
                 }
-                pb.writeObjects([pbItem])
+                return pbItem
             }
+            pb.writeObjects(restoredItems)
         }
     }
 
@@ -78,7 +68,6 @@ final class TextInjectionEngine: @unchecked Sendable {
     func finishClipboardRestore() {
         guard let pending = pendingClipboardRestore else { return }
         pendingClipboardRestore = nil
-        usleep(300_000)
         pending.snapshot.restore(expectedChangeCount: pending.changeCount)
     }
 
@@ -95,7 +84,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         pb.clearContents()
         pb.setString(text, forType: .string)
         let postWriteChangeCount = pb.changeCount
-        print("Spoken: [DEBUG] clipboard written: \(pb.string(forType: .string)?.prefix(30) ?? "nil")")
+        print("Spoken: [DEBUG] clipboard text prepared, length=\(text.count)")
 
         usleep(50_000)
 

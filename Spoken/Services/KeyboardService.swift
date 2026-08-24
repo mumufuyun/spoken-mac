@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 
 /// 键盘输入服务
+@MainActor
 class KeyboardService {
     static let shared = KeyboardService()
 

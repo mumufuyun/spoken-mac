@@ -15,6 +15,7 @@ enum AppState: String, CaseIterable {
     case postProcessing
 }
 
+@MainActor
 class StateManager: ObservableObject {
     static let shared = StateManager()
 
@@ -37,6 +38,7 @@ class StateManager: ObservableObject {
     }
 }
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
@@ -50,6 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupPopover()
         setupHotKey()
+        registerSleepWakeObservers()
         checkPermissions()
     }
 
@@ -76,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupPopover() {
         let contentView = ContentView()
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 260, height: 200)
+        popover.contentSize = NSSize(width: 300, height: 205)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: contentView)
 
@@ -85,14 +88,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self = self else { return }
             let showSettings = notification.userInfo?["showSettings"] as? Bool ?? false
-            let newSize = showSettings ? NSSize(width: 420, height: 460) : NSSize(width: 260, height: 200)
-            self.popover.contentSize = newSize
-            // 如果 popover 正在显示，需要调整位置以匹配新大小
-            if self.popover.isShown, let button = self.statusItem.button {
-                self.popover.performClose(nil)
-                self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let newSize = showSettings ? NSSize(width: 420, height: 460) : NSSize(width: 300, height: 205)
+                self.popover.contentSize = newSize
+                // 如果 popover 正在显示，需要调整位置以匹配新大小
+                if self.popover.isShown, let button = self.statusItem.button {
+                    self.popover.performClose(nil)
+                    self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                }
             }
         }
     }
@@ -126,6 +131,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeyService.registerAll()
     }
 
+    // MARK: - Sleep / Wake
+
+    /// 系统睡眠前主动断开云端连接，避免在休眠期间持有死连接；
+    /// 唤醒后重置连接状态，确保首次录音走全新连接。
+    private func registerSleepWakeObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                print("Spoken: [DEBUG] System will sleep, disconnecting cloud speech")
+                CloudSpeechService.shared.disconnect()
+                if self?.recordingPanel?.isVisible == true {
+                    self?.recordingViewModel.cancel()
+                }
+            }
+        }
+
+        center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("Spoken: [DEBUG] System did wake, resetting cloud speech connection")
+            CloudSpeechService.shared.disconnect()
+        }
+    }
+
     private func handleHotKey() {
         if popover.isShown {
             popover.performClose(nil)
@@ -152,6 +187,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stateManager.transition(to: .starting)
 
         let viewModel = RecordingViewModel()
+        viewModel.targetApplication = frontmostAppBeforeHotKey
         let recordingView = RecordingPanelView(viewModel: viewModel)
         let hostingController = NSHostingController(rootView: recordingView)
 
@@ -178,6 +214,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         viewModel.onCancel = { [weak self] in
             guard let strongSelf = self else { return }
+            strongSelf.hotKeyService.stopEscapeMonitoring()
             strongSelf.stateManager.transition(to: .idle)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 strongSelf.recordingPanel?.orderOut(nil)
@@ -186,6 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         viewModel.onClose = { [weak self] in
+            self?.hotKeyService.stopEscapeMonitoring()
             self?.recordingPanel?.orderOut(nil)
             self?.recordingPanel = nil
         }
@@ -198,6 +236,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.recordingViewModel = viewModel
         self.recordingPanel = panel
+        hotKeyService.startEscapeMonitoring()
         panel.orderFront(nil)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -221,12 +260,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.executeInjection(text: text)
+            self?.executeInjection(text: text, targetApp: targetApp)
         }
     }
 
-    private func executeInjection(text: String) {
+    private func executeInjection(text: String, targetApp: NSRunningApplication?) {
         print("Spoken: [DEBUG] frontmost app before inject: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+
+        guard let targetApp,
+              !targetApp.isTerminated,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetApp.processIdentifier else {
+            print("Spoken: [WARN] Target app is no longer frontmost; copied text without automatic paste")
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            cleanupAfterInjection()
+            return
+        }
 
         let success = KeyboardService.shared.typeText(text)
         print("Spoken: [DEBUG] injection success: \(success)")
@@ -242,6 +292,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func cleanupAfterInjection() {
+        hotKeyService.stopEscapeMonitoring()
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
         stateManager.transition(to: .idle)
@@ -309,6 +360,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Recording ViewModel
 
+@MainActor
 class RecordingViewModel: ObservableObject {
     @Published var isRecording = false
     @Published var isCloudRecognizing = false
@@ -318,6 +370,7 @@ class RecordingViewModel: ObservableObject {
     @Published var displayStatus = "录音"
     @Published var isCancelled = false
     private var frontmostApp: NSRunningApplication?
+    var targetApplication: NSRunningApplication?
     private var lastRecognizedText = ""
     private let stateManager = StateManager.shared
 
@@ -326,13 +379,13 @@ class RecordingViewModel: ObservableObject {
     var onCancel: (() -> Void)?
 
     func startRecording() {
-        frontmostApp = NSWorkspace.shared.frontmostApplication
+        frontmostApp = targetApplication ?? NSWorkspace.shared.frontmostApplication
         isRecording = true
         isProcessing = false
         partialText = ""
         lastRecognizedText = ""
         statusText = "正在聆听..."
-        displayStatus = "录音"
+        displayStatus = SpokenMode.load().rawValue
 
         stateManager.transition(to: .recording)
 
@@ -353,7 +406,11 @@ class RecordingViewModel: ObservableObject {
                 guard let self = self, self.isRecording else { return }
                 // 云端连接失败时，在状态文本中提示用户
                 if self.isCloudRecognizing && self.partialText.isEmpty {
-                    self.statusText = "云端连接失败，已切换本地识别"
+                    let raw = UserDefaults.standard.string(forKey: "speechRecognitionProvider")
+                    let provider = SpeechRecognitionProvider(rawValue: raw ?? "") ?? .local
+                    self.statusText = provider == .auto
+                        ? "云端连接失败，已切换本地识别"
+                        : "云端连接失败，请重试"
                 }
             }
         }
@@ -373,10 +430,9 @@ class RecordingViewModel: ObservableObject {
                     strongSelf.isRecording = false
                     strongSelf.partialText = ""
 
-                    let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
-                    let mode = SpokenMode(rawValue: modeRaw) ?? .direct
+                    let mode = SpokenMode.load()
 
-                    if mode == .direct {
+                    if !mode.requiresAI {
                         strongSelf.isProcessing = false
                         strongSelf.statusText = ""
                     } else {
@@ -387,6 +443,17 @@ class RecordingViewModel: ObservableObject {
 
                     strongSelf.stateManager.transition(to: .finishing)
                     strongSelf.processAndInput(text.isEmpty ? strongSelf.lastRecognizedText : text)
+                }
+            },
+            onStartFailure: { [weak self] reason in
+                DispatchQueue.main.async {
+                    guard let self, !self.isCancelled else { return }
+                    self.isRecording = false
+                    self.isCloudRecognizing = false
+                    self.isProcessing = false
+                    self.statusText = reason
+                    self.stateManager.transition(to: .idle)
+                    self.onCancel?()
                 }
             }
         )
@@ -420,10 +487,9 @@ class RecordingViewModel: ObservableObject {
         isCloudRecognizing = false
         statusText = ""
 
-        let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
-        let mode = SpokenMode(rawValue: modeRaw) ?? .direct
+        let mode = SpokenMode.load()
 
-        if mode == .direct {
+        if !mode.requiresAI {
             isProcessing = false
         } else {
             isProcessing = true
@@ -444,14 +510,13 @@ class RecordingViewModel: ObservableObject {
             return
         }
 
-        let modeRaw = UserDefaults.standard.string(forKey: "spokenMode") ?? "直接输入"
-        let mode = SpokenMode(rawValue: modeRaw) ?? .direct
-        let translateLangRaw = UserDefaults.standard.string(forKey: "translateLang") ?? "英文"
-        let translateLang = TranslateLanguage(rawValue: translateLangRaw) ?? .english
+        let mode = SpokenMode.load()
+        let translateLangRaw = UserDefaults.standard.string(forKey: "translateLang") ?? TranslateLanguage.original.rawValue
+        let translateLang = TranslateLanguage(rawValue: translateLangRaw) ?? .original
 
         print("Spoken: [DEBUG] Process mode: \(mode.rawValue), translateLang: \(translateLang.rawValue)")
 
-        if mode == .direct {
+        if !mode.requiresAI && translateLang == .original {
             print("Spoken: [DEBUG] Direct mode, skipping AI processing")
             isProcessing = false
             onComplete?(text, frontmostApp)
@@ -472,6 +537,10 @@ class RecordingViewModel: ObservableObject {
             }
 
             DispatchQueue.main.async {
+                guard !strongSelf.isCancelled else {
+                    print("Spoken: [DEBUG] Ignoring AI completion after cancellation")
+                    return
+                }
                 strongSelf.isProcessing = false
                 let finalText: String
 
