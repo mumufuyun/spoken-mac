@@ -67,6 +67,7 @@ final class CloudSessionTests: XCTestCase {
             maxAge: 180,
             sameAPIKey: true,
             sameModel: true,
+            sameEndpoint: true,
             hasTransport: true,
             hasMissedHeartbeat: false
         ))
@@ -75,6 +76,7 @@ final class CloudSessionTests: XCTestCase {
             maxAge: 180,
             sameAPIKey: true,
             sameModel: true,
+            sameEndpoint: true,
             hasTransport: true,
             hasMissedHeartbeat: false
         ))
@@ -83,6 +85,7 @@ final class CloudSessionTests: XCTestCase {
             maxAge: 180,
             sameAPIKey: true,
             sameModel: true,
+            sameEndpoint: true,
             hasTransport: true,
             hasMissedHeartbeat: true
         ))
@@ -91,6 +94,16 @@ final class CloudSessionTests: XCTestCase {
             maxAge: 120,
             sameAPIKey: true,
             sameModel: true,
+            sameEndpoint: true,
+            hasTransport: true,
+            hasMissedHeartbeat: false
+        ))
+        XCTAssertFalse(WarmConnectionReusePolicy.canReuse(
+            age: 30,
+            maxAge: 180,
+            sameAPIKey: true,
+            sameModel: true,
+            sameEndpoint: false,
             hasTransport: true,
             hasMissedHeartbeat: false
         ))
@@ -99,7 +112,7 @@ final class CloudSessionTests: XCTestCase {
     func testQwenSessionBecomesReadyOnlyAfterUpdateAcknowledgement() {
         XCTAssertEqual(
             QwenSessionHandshakePolicy.action(for: "session.created"),
-            .sendSessionUpdate
+            .noteSessionCreated
         )
         XCTAssertEqual(
             QwenSessionHandshakePolicy.action(for: "session.updated"),
@@ -109,6 +122,28 @@ final class CloudSessionTests: XCTestCase {
             QwenSessionHandshakePolicy.action(for: "conversation.item.input_audio_transcription.text"),
             .ignore
         )
+    }
+
+    func testQwenEndpointUsesDedicatedWorkspaceDomainWhenConfigured() throws {
+        XCTAssertEqual(
+            QwenEndpointResolver.host(workspaceID: nil),
+            "dashscope.aliyuncs.com"
+        )
+        XCTAssertEqual(
+            QwenEndpointResolver.host(workspaceID: "  ws-123  "),
+            "ws-123.cn-beijing.maas.aliyuncs.com"
+        )
+        XCTAssertEqual(
+            QwenEndpointResolver.host(workspaceID: "invalid.example.com"),
+            "dashscope.aliyuncs.com"
+        )
+        let url = try XCTUnwrap(QwenEndpointResolver.webSocketURL(
+            workspaceID: "ws-123",
+            model: "qwen3-asr-flash-realtime"
+        ))
+        XCTAssertEqual(url.host, "ws-123.cn-beijing.maas.aliyuncs.com")
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value,
+                       "qwen3-asr-flash-realtime")
     }
 
     func testPCMVoiceActivityDetectorRejectsSilenceAndDetectsSpeech() {

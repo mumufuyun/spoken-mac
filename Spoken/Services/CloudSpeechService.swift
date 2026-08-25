@@ -230,6 +230,8 @@ enum CloudSpeechError: LocalizedError {
     case missingAPIKey
     case invalidURL
     case timeout
+    case transportTimeout
+    case sessionSetupTimeout
     case connectionFailed
     case recognitionStalled
     case apiError(String)
@@ -240,6 +242,8 @@ enum CloudSpeechError: LocalizedError {
         case .missingAPIKey: return "未配置 API Key"
         case .invalidURL: return "无效的 WebSocket URL"
         case .timeout: return "连接超时"
+        case .transportTimeout: return "云端网络连接超时"
+        case .sessionSetupTimeout: return "云端识别会话初始化超时"
         case .connectionFailed: return "连接失败"
         case .recognitionStalled: return "云端识别无响应"
         case .apiError(let msg): return "API 错误: \(msg)"

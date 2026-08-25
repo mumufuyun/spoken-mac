@@ -937,6 +937,7 @@ struct SpeechConfigSectionView: View {
     @State private var cloudProviderId: String = "dashscope"
     @State private var apiKey: String = ""
     @State private var modelName: String = ""
+    @State private var workspaceID: String = ""
     @State private var saved: Bool = false
     @State private var metrics = ASRStabilityMetrics.shared.snapshot()
     @State private var latencyMetrics = PipelineLatencyMetrics.shared.distributions()
@@ -1014,6 +1015,20 @@ struct SpeechConfigSectionView: View {
                         TextField(defaultModelPlaceholder(), text: $modelName)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 12))
+                    }
+
+                    if cloudProviderId == "qwen-realtime" {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("业务空间ID（推荐）")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(textPrimary)
+                            TextField("留空时使用DashScope公共域名", text: $workspaceID)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12))
+                            Text("填写后使用北京地域业务空间专属域名，提高实时识别连接稳定性。")
+                                .font(.system(size: 10))
+                                .foregroundColor(textMuted)
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
@@ -1127,6 +1142,7 @@ struct SpeechConfigSectionView: View {
         cloudProviderId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "qwen-realtime"
         apiKey = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
         modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? defaultModelPlaceholder()
+        workspaceID = UserDefaults.standard.string(forKey: "speech_workspace_id") ?? ""
     }
 
     private func saveConfig() {
@@ -1140,6 +1156,17 @@ struct SpeechConfigSectionView: View {
         }
         let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         UserDefaults.standard.set(model.isEmpty ? defaultModelPlaceholder() : model, forKey: "speech_model_name")
+        let trimmedWorkspaceID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if QwenEndpointResolver.normalizedWorkspaceID(trimmedWorkspaceID) != nil {
+            UserDefaults.standard.set(trimmedWorkspaceID, forKey: "speech_workspace_id")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "speech_workspace_id")
+            workspaceID = ""
+        }
+        CloudSpeechService.shared.disconnect()
+        if provider == .cloud || provider == .auto {
+            SpeechService.shared.prepareCloudConnection()
+        }
         saved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             saved = false
