@@ -30,14 +30,15 @@ enum CloudRecognitionResultResolver {
 struct WarmConnectionReusePolicy {
     static func canReuse(
         age: TimeInterval,
-        maxAge: TimeInterval,
+        maxAge: TimeInterval?,
         sameAPIKey: Bool,
         sameModel: Bool,
         hasTransport: Bool,
         hasMissedHeartbeat: Bool
     ) -> Bool {
-        age >= 0
-            && age <= maxAge
+        let isWithinAllowedAge = maxAge.map { age <= $0 } ?? true
+        return age >= 0
+            && isWithinAllowedAge
             && sameAPIKey
             && sameModel
             && hasTransport
@@ -67,15 +68,16 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private var retryCount = 0
     private let maxRetries = 2
     private let retryDelays: [TimeInterval] = [0.3, 0.8]
+    private let warmRecoveryDelays: [TimeInterval] = [1, 2, 5, 10, 30]
     private let connectTimeout: TimeInterval = 5
     private let finishTimeout: TimeInterval = 8
-    private let warmConnectionTTL: TimeInterval = 180
 
     private var apiKey = ""
     private var model = ""
     private var sessionReady = false
     private var sessionUpdateSent = false
     private var commitSent = false
+    private var sessionFinishSent = false
     private var finishRequested = false
     private var intentionallyClosing = false
     private var accumulatedText = ""
@@ -90,7 +92,8 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private var finishTimeoutItem: DispatchWorkItem?
     private var heartbeatTimer: DispatchSourceTimer?
     private var missedPongs = 0
-    private var warmExpiryItem: DispatchWorkItem?
+    private var warmRecoveryItem: DispatchWorkItem?
+    private var warmRecoveryAttempt = 0
     private var connectionStartedAt: TimeInterval?
     private var isWarmTransport = false
     private var hasPublishedFirstPartial = false
@@ -140,7 +143,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             }
 
             if self.canAdoptWarmConnection(apiKey: resolvedKey, model: resolvedModel) {
-                self.cancelWarmExpiry()
+                self.cancelWarmRecovery()
                 self.isWarmTransport = false
                 self.partialCallback = onPartial
                 self.finalCallback = onFinal
@@ -150,6 +153,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
                 self.pendingAudioBuffers.removeAll(keepingCapacity: true)
                 self.finishRequested = false
                 self.commitSent = false
+                self.sessionFinishSent = false
                 self.hasPublishedFirstPartial = false
                 ASRStabilityMetrics.shared.recordSessionStarted()
                 Self.logger.info("session=\(self.shortSessionID) adopted warm connection ready=\(self.sessionReady)")
@@ -175,9 +179,11 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             self.pendingAudioBuffers.removeAll(keepingCapacity: true)
             self.finishRequested = false
             self.commitSent = false
+            self.sessionFinishSent = false
             self.intentionallyClosing = false
             self.connectionStartedAt = ProcessInfo.processInfo.systemUptime
             self.isWarmTransport = false
+            self.warmRecoveryAttempt = 0
             self.hasPublishedFirstPartial = false
 
             Self.logger.info("session=\(self.shortSessionID) starting fresh connection")
@@ -194,7 +200,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
 
         stateQueue.async {
             if self.canAdoptWarmConnection(apiKey: resolvedKey, model: resolvedModel) {
-                Self.logger.info("session=\(self.shortSessionID) preconnect reused existing warm transport")
+                Self.logger.info("session=\(self.shortSessionID) preconnect reused persistent warm transport")
                 return
             }
 
@@ -205,13 +211,14 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             self.retryCount = 0
             self.finishRequested = false
             self.commitSent = false
+            self.sessionFinishSent = false
             self.intentionallyClosing = false
             self.connectionStartedAt = ProcessInfo.processInfo.systemUptime
             self.isWarmTransport = true
             self.hasPublishedFirstPartial = false
-            Self.logger.info("session=\(self.shortSessionID) starting bounded warm connection ttl=\(Int(self.warmConnectionTTL))s")
+            self.warmRecoveryAttempt = 0
+            Self.logger.info("session=\(self.shortSessionID) starting persistent warm connection")
             self.startConnectionAttempt()
-            self.scheduleWarmExpiry()
         }
     }
 
@@ -276,6 +283,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         sessionReady = false
         sessionUpdateSent = false
         commitSent = false
+        sessionFinishSent = false
         intentionallyClosing = false
 
         guard let url = URL(string: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=\(model)") else {
@@ -316,6 +324,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         sessionReady = false
 
         guard retryCount < maxRetries else {
+            if isWarmTransport && partialCallback == nil {
+                scheduleWarmRecovery(after: error)
+                return
+            }
             failPermanently(error)
             return
         }
@@ -353,7 +365,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         assertOnStateQueue()
         cancelConnectTimeout()
         cancelFinishTimeout()
-        cancelWarmExpiry()
+        cancelWarmRecovery()
         stopHeartbeat()
 
         let task = webSocketTask
@@ -364,6 +376,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         sessionReady = false
         sessionUpdateSent = false
         commitSent = false
+        sessionFinishSent = false
 
         if clearBusinessState {
             partialCallback = nil
@@ -378,6 +391,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             model = ""
             connectionStartedAt = nil
             isWarmTransport = false
+            warmRecoveryAttempt = 0
             hasPublishedFirstPartial = false
         }
 
@@ -450,6 +464,21 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         }
     }
 
+    private func sendSessionFinish(task: URLSessionWebSocketTask) {
+        assertOnStateQueue()
+        guard webSocketTask === task, !sessionFinishSent else { return }
+        sessionFinishSent = true
+        let event: [String: Any] = [
+            "event_id": nextEventID(),
+            "type": "session.finish"
+        ]
+        Self.logger.info("session=\(shortSessionID) sending session.finish")
+        sendJSON(event, task: task) { [weak self] error in
+            guard let self, let error else { return }
+            self.retryOrFail(error, failedTask: task)
+        }
+    }
+
     private func sendJSON(
         _ object: [String: Any],
         task: URLSessionWebSocketTask,
@@ -506,7 +535,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         case "session.created":
             sessionReady = true
             cancelConnectTimeout()
+            cancelWarmRecovery()
             retryCount = 0
+            warmRecoveryAttempt = 0
             updateState(.connected)
             if !isWarmTransport {
                 ASRStabilityMetrics.shared.recordConnected()
@@ -528,7 +559,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         case "conversation.item.input_audio_transcription.completed":
             let transcript = extractTranscript(json) ?? accumulatedText
             if !transcript.isEmpty { publishPartial(transcript) }
-            if finishRequested { completeSuccessfully(transcript) }
+            if finishRequested { sendSessionFinish(task: task) }
+
+        case "session.finished":
+            if finishRequested { completeSuccessfully(accumulatedText) }
 
         case "error":
             let payload = json["error"] as? [String: Any]
@@ -624,7 +658,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         let age = ProcessInfo.processInfo.systemUptime - connectionStartedAt
         return isWarmTransport && WarmConnectionReusePolicy.canReuse(
             age: age,
-            maxAge: warmConnectionTTL,
+            maxAge: nil,
             sameAPIKey: self.apiKey == apiKey,
             sameModel: self.model == model,
             hasTransport: webSocketTask != nil,
@@ -632,24 +666,37 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         )
     }
 
-    private func scheduleWarmExpiry() {
-        cancelWarmExpiry()
-        let expectedSessionID = sessionID
+    private func scheduleWarmRecovery(after error: Error) {
+        assertOnStateQueue()
+        closeTransport(clearBusinessState: false, notifyDisconnected: false)
+        updateState(.failed(error.localizedDescription))
+
+        let delay = warmRecoveryDelays[min(warmRecoveryAttempt, warmRecoveryDelays.count - 1)]
+        warmRecoveryAttempt += 1
+        let expectedAPIKey = apiKey
+        let expectedModel = model
         let item = DispatchWorkItem { [weak self] in
             guard let self,
-                  self.sessionID == expectedSessionID,
-                  self.isWarmTransport else { return }
-            Self.logger.info("session=\(self.shortSessionID) warm connection expired")
-            self.closeTransport(clearBusinessState: true, notifyDisconnected: false)
-            self.updateState(.idle)
+                  self.isWarmTransport,
+                  self.partialCallback == nil,
+                  self.apiKey == expectedAPIKey,
+                  self.model == expectedModel else { return }
+            self.sessionID = UUID()
+            self.retryCount = 0
+            self.connectionStartedAt = ProcessInfo.processInfo.systemUptime
+            self.intentionallyClosing = false
+            ASRStabilityMetrics.shared.recordReconnect()
+            Self.logger.info("session=\(self.shortSessionID) self-healing warm connection attempt=\(self.warmRecoveryAttempt)")
+            self.startConnectionAttempt()
         }
-        warmExpiryItem = item
-        stateQueue.asyncAfter(deadline: .now() + warmConnectionTTL, execute: item)
+        warmRecoveryItem = item
+        Self.logger.warning("warm connection unavailable; retrying in \(delay)s")
+        stateQueue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    private func cancelWarmExpiry() {
-        warmExpiryItem?.cancel()
-        warmExpiryItem = nil
+    private func cancelWarmRecovery() {
+        warmRecoveryItem?.cancel()
+        warmRecoveryItem = nil
     }
 
     private func startHeartbeat(task: URLSessionWebSocketTask) {

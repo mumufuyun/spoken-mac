@@ -86,6 +86,14 @@ final class CloudSessionTests: XCTestCase {
             hasTransport: true,
             hasMissedHeartbeat: true
         ))
+        XCTAssertTrue(WarmConnectionReusePolicy.canReuse(
+            age: 24 * 60 * 60,
+            maxAge: nil,
+            sameAPIKey: true,
+            sameModel: true,
+            hasTransport: true,
+            hasMissedHeartbeat: false
+        ))
     }
 
     func testLatencyDistributionUsesNearestRankPercentiles() {

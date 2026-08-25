@@ -2,10 +2,11 @@ import SwiftUI
 import CoreGraphics
 
 struct ContentView: View {
+    let onOpenSettings: () -> Void
+
     @State private var mode: SpokenMode = .workMessage
     @State private var translateLang: TranslateLanguage = .original
     @State private var statusMessage = "语言是最好的输入"
-    @State private var showSettings = false
 
     // ElevenLabs Warm Palette
     private let textSecondary = Color(hex: "#4e4e4e")
@@ -13,20 +14,7 @@ struct ContentView: View {
     private let accentBlue = Color(hex: "#4a90d9")
 
     var body: some View {
-        Group {
-            if showSettings {
-                SettingsView(isPresented: $showSettings)
-            } else {
-                mainView
-            }
-        }
-        .onChange(of: showSettings) { _, newValue in
-            NotificationCenter.default.post(
-                name: .spokenPopoverResize,
-                object: nil,
-                userInfo: ["showSettings": newValue]
-            )
-        }
+        mainView
     }
 
     private var mainView: some View {
@@ -41,7 +29,7 @@ struct ContentView: View {
                 Text("⌥+空格")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundColor(textMuted)
-                Button(action: { showSettings = true }) {
+                Button(action: onOpenSettings) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14))
                         .foregroundColor(textMuted.opacity(0.6))
@@ -222,7 +210,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
-    @Binding var isPresented: Bool
     @State private var selectedSection: SettingsSection = .modelConfig
     @State private var apiKey: String = ""
     @State private var promptText: String = ""
@@ -244,12 +231,6 @@ struct SettingsView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(textPrimary)
                 Spacer()
-                Button(action: { isPresented = false }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(textMuted.opacity(0.6))
-                }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -313,7 +294,14 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 420, height: 460)
+        .frame(
+            minWidth: 540,
+            idealWidth: 640,
+            maxWidth: .infinity,
+            minHeight: 520,
+            idealHeight: 600,
+            maxHeight: .infinity
+        )
         .background(Color.white)
         .onAppear {
             loadSectionData(selectedSection)

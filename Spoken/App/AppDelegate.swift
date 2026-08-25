@@ -2,10 +2,6 @@ import AppKit
 import SwiftUI
 import Network
 
-extension Notification.Name {
-    static let spokenPopoverResize = Notification.Name("com.moss.Spoken.popoverResize")
-}
-
 enum AppState: String, CaseIterable {
     case idle
     case starting
@@ -45,6 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover!
     private var hotKeyService: HotKeyService!
     private var recordingPanel: NSPanel?
+    private var settingsWindow: NSWindow?
     private var recordingViewModel = RecordingViewModel()
     private var frontmostAppBeforeHotKey: NSRunningApplication?
     private let stateManager = StateManager.shared
@@ -90,29 +87,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Popover
 
     private func setupPopover() {
-        let contentView = ContentView()
+        let contentView = ContentView { [weak self] in
+            self?.showSettingsWindow()
+        }
         popover = NSPopover()
         popover.contentSize = NSSize(width: 300, height: 205)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: contentView)
 
-        NotificationCenter.default.addObserver(
-            forName: .spokenPopoverResize,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            let showSettings = notification.userInfo?["showSettings"] as? Bool ?? false
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let newSize = showSettings ? NSSize(width: 420, height: 460) : NSSize(width: 300, height: 205)
-                self.popover.contentSize = newSize
-                // 如果 popover 正在显示，需要调整位置以匹配新大小
-                if self.popover.isShown, let button = self.statusItem.button {
-                    self.popover.performClose(nil)
-                    self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                }
-            }
-        }
     }
 
     @objc private func togglePopover() {
@@ -122,6 +104,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
+    }
+
+    // MARK: - Settings Window
+
+    private func showSettingsWindow() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+
+        let window: NSWindow
+        if let existingWindow = settingsWindow {
+            window = existingWindow
+        } else {
+            let hostingController = NSHostingController(rootView: SettingsView())
+            let newWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 600),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            newWindow.title = "Spoken 设置"
+            newWindow.contentViewController = hostingController
+            newWindow.minSize = NSSize(width: 540, height: 520)
+            newWindow.isReleasedWhenClosed = false
+            newWindow.collectionBehavior.insert(.moveToActiveSpace)
+            if !newWindow.setFrameUsingName("SpokenSettingsWindow") {
+                newWindow.center()
+            }
+            newWindow.setFrameAutosaveName("SpokenSettingsWindow")
+            settingsWindow = newWindow
+            window = newWindow
+        }
+
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - Global HotKey
@@ -438,10 +458,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 class RecordingViewModel: ObservableObject {
     @Published var isRecording = false
+    @Published var isCaptureReady = false
     @Published var isCloudRecognizing = false
     @Published var isProcessing = false
     @Published var partialText = ""
-    @Published var statusText = "正在聆听..."
+    @Published var statusText = "正在准备麦克风，请稍候…"
     @Published var displayStatus = "录音"
     @Published var isCancelled = false
     private var frontmostApp: NSRunningApplication?
@@ -456,10 +477,11 @@ class RecordingViewModel: ObservableObject {
     func startRecording() {
         frontmostApp = targetApplication ?? NSWorkspace.shared.frontmostApplication
         isRecording = true
+        isCaptureReady = false
         isProcessing = false
         partialText = ""
         lastRecognizedText = ""
-        statusText = "正在聆听..."
+        statusText = "正在准备麦克风，请稍候…"
         displayStatus = SpokenMode.load().rawValue
         PipelineLatencyMetrics.shared.mark(.recordingStarted)
 
@@ -497,13 +519,16 @@ class RecordingViewModel: ObservableObject {
                     guard let self = self, self.isRecording else { return }
                     self.partialText = text
                     self.lastRecognizedText = text
-                    self.statusText = text.isEmpty ? "正在聆听..." : text
+                    self.statusText = text.isEmpty
+                        ? (self.isCaptureReady ? "可以开始说话，语音不会遗漏" : "正在准备麦克风，请稍候…")
+                        : text
                 }
             },
             onFinal: { [weak self] text in
                 DispatchQueue.main.async {
                     guard let strongSelf = self else { return }
                     strongSelf.isRecording = false
+                    strongSelf.isCaptureReady = false
                     strongSelf.partialText = ""
 
                     let mode = SpokenMode.load()
@@ -521,10 +546,18 @@ class RecordingViewModel: ObservableObject {
                     strongSelf.processAndInput(text.isEmpty ? strongSelf.lastRecognizedText : text)
                 }
             },
+            onCaptureReady: { [weak self] in
+                guard let self, self.isRecording, !self.isCancelled else { return }
+                self.isCaptureReady = true
+                if self.partialText.isEmpty {
+                    self.statusText = "可以开始说话，语音不会遗漏"
+                }
+            },
             onStartFailure: { [weak self] reason in
                 DispatchQueue.main.async {
                     guard let self, !self.isCancelled else { return }
                     self.isRecording = false
+                    self.isCaptureReady = false
                     self.isCloudRecognizing = false
                     self.isProcessing = false
                     self.statusText = reason
@@ -536,6 +569,7 @@ class RecordingViewModel: ObservableObject {
 
         if !started {
             isRecording = false
+            isCaptureReady = false
             isCloudRecognizing = false
             statusText = "录音启动失败，请重试"
             stateManager.transition(to: .idle)
@@ -551,6 +585,7 @@ class RecordingViewModel: ObservableObject {
 
         statusText = "已取消"
         isRecording = false
+        isCaptureReady = false
         isCloudRecognizing = false
         isProcessing = false
         PipelineLatencyMetrics.shared.abandon()
@@ -561,6 +596,7 @@ class RecordingViewModel: ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
+        isCaptureReady = false
         isCloudRecognizing = false
         statusText = ""
 
@@ -676,20 +712,30 @@ struct RecordingPanelView: View {
 
                 Spacer()
 
-                if viewModel.isRecording {
+                if viewModel.isRecording && !viewModel.isCaptureReady {
                     HStack(spacing: 5) {
                         Circle()
-                            .fill(Color(hex: "#c0392b"))
+                            .fill(Color(hex: "#f39c12"))
+                            .frame(width: 6, height: 6)
+                        Text("准备中")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(0.14)
+                            .foregroundColor(Color(hex: "#f39c12"))
+                    }
+                } else if viewModel.isRecording {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(Color(hex: "#27ae60"))
                             .frame(width: 6, height: 6)
                             .scaleEffect(pulseScale)
                             .animation(
                                 .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
                                 value: pulseScale
                             )
-                        Text("录音")
+                        Text("可说话")
                             .font(.system(size: 11, weight: .medium))
                             .tracking(0.14)
-                            .foregroundColor(Color(hex: "#c0392b"))
+                            .foregroundColor(Color(hex: "#27ae60"))
                     }
                     .onAppear {
                         pulseScale = 1.0
@@ -741,8 +787,8 @@ struct RecordingPanelView: View {
             Spacer().frame(height: 12)
 
             WaveformView(
-                isRecording: viewModel.isRecording,
-                isCloudRecognizing: viewModel.isCloudRecognizing,
+                isRecording: viewModel.isRecording && viewModel.isCaptureReady,
+                isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
                 isProcessing: viewModel.isProcessing
             )
             .frame(height: 48)

@@ -340,6 +340,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     func startRecording(
         onPartial: @escaping (String) -> Void,
         onFinal: @escaping (String) -> Void,
+        onCaptureReady: @escaping () -> Void = {},
         onStartFailure: @escaping (String) -> Void = { _ in }
     ) -> Bool {
         guard state == .idle else {
@@ -366,11 +367,11 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
         switch provider {
         case .local:
-            installTapAndStart(onPartial: onPartial, onFinal: onFinal, sessionID: sessionID)
+            installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
         case .cloud:
-            startCloudRecording(onPartial: onPartial, onFinal: onFinal, sessionID: sessionID)
+            startCloudRecording(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
         case .auto:
-            startCloudRecording(onPartial: onPartial, onFinal: onFinal, allowFallback: true, sessionID: sessionID)
+            startCloudRecording(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, allowFallback: true, sessionID: sessionID)
         }
 
         return true
@@ -389,7 +390,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - 云端识别
 
-    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, allowFallback: Bool = false, sessionID: UUID) {
+    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onCaptureReady: @escaping () -> Void, allowFallback: Bool = false, sessionID: UUID) {
         logInfo("startCloudRecording called, allowFallback=\(allowFallback)")
         resetAudioEngine()
 
@@ -409,7 +410,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             if allowFallback {
                 logInfo("auto fallback to local")
                 currentProvider = .local
-                installTapAndStart(onPartial: onPartial, onFinal: onFinal, sessionID: sessionID)
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
             } else {
                 failStart("音频输入不可用", sessionID: sessionID)
             }
@@ -460,7 +461,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                     ASRStabilityMetrics.shared.recordLocalFallback()
                     self.cleanupResources()
                     self.currentProvider = .local
-                    self.installTapAndStart(onPartial: onPartial, onFinal: onFinal, sessionID: sessionID)
+                    self.installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
                 } else if self.state != .stopping {
                     self.failStart(error.localizedDescription, sessionID: sessionID)
                 }
@@ -474,11 +475,14 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         var tapFormat: AVAudioFormat? = speechFormat
         var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: tapFormat) { [weak self] buffer, _ in
             guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
-            self.markAudioReceived(for: sessionID)
             guard self.isUsingCloud else { return }
 
             guard let pcmData = StreamingASRPCMConverter.data(fromCanonicalBuffer: buffer) else { return }
+            let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
             CloudSpeechService.shared.sendAudio(pcmData)
+            if isFirstAudioFrame {
+                DispatchQueue.main.async(execute: onCaptureReady)
+            }
         }
 
         if !tapInstalled, speechFormat != nil {
@@ -487,9 +491,12 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             if let converter = StreamingASRPCMConverter(inputFormat: recordingFormat) {
                 tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
                     guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
-                    self.markAudioReceived(for: sessionID)
                     guard self.isUsingCloud, let pcmData = converter.convert(buffer) else { return }
+                    let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
                     CloudSpeechService.shared.sendAudio(pcmData)
+                    if isFirstAudioFrame {
+                        DispatchQueue.main.async(execute: onCaptureReady)
+                    }
                 }
             } else {
                 tapInstalled = false
@@ -504,7 +511,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             if allowFallback {
                 logInfo("auto fallback to local")
                 currentProvider = .local
-                installTapAndStart(onPartial: onPartial, onFinal: onFinal, sessionID: sessionID)
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
             } else {
                 failStart("无法安装云端录音通道", sessionID: sessionID)
             }
@@ -522,7 +529,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             if allowFallback {
                 logInfo("auto fallback to local")
                 currentProvider = .local
-                installTapAndStart(onPartial: onPartial, onFinal: onFinal, sessionID: sessionID)
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
             } else {
                 failStart("音频引擎启动失败", sessionID: sessionID)
             }
@@ -534,7 +541,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     }
 
-    private func installTapAndStart(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, sessionID: UUID) {
+    private func installTapAndStart(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onCaptureReady: @escaping () -> Void, sessionID: UUID) {
         let maxRetries = 3
         let retryDelays: [TimeInterval] = [0.2, 0.5, 1.0]
 
@@ -588,7 +595,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: tapFormat) { [weak self] buffer, _ in
                 guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
                 recognitionRequest.append(buffer)
-                self.markAudioReceived(for: sessionID)
+                if self.markAudioReceived(for: sessionID) {
+                    DispatchQueue.main.async(execute: onCaptureReady)
+                }
             }
 
             if !tapInstalled, speechFormat != nil {
@@ -597,7 +606,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                 tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
                     guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
                     recognitionRequest.append(buffer)
-                    self.markAudioReceived(for: sessionID)
+                    if self.markAudioReceived(for: sessionID) {
+                        DispatchQueue.main.async(execute: onCaptureReady)
+                    }
                 }
             }
 
