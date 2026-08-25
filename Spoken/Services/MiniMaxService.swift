@@ -4,6 +4,7 @@ import Foundation
 /// 支持 MiniMax、DeepSeek 及任意 OpenAI API 兼容的服务
 final class MiniMaxService: @unchecked Sendable {
     static let shared = MiniMaxService()
+    static let thinkingEnabledKey = "llm_enable_thinking"
 
     // MARK: - 预设配置
 
@@ -117,16 +118,19 @@ final class MiniMaxService: @unchecked Sendable {
         translateLang: TranslateLanguage,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        // 第二轮真实回归中 54 次请求有 2 次在 16–19 秒完成。
-        // 20 秒可避免提前丢弃已接近完成的结果，同时仍为异常连接保留有界回退。
-        let aiTimeout = 20.0
-
         if !mode.requiresAI && translateLang == .original {
             completion(.success(text))
             return
         }
+        let config = currentConfig
+        let thinkingEnabled = UserDefaults.standard.bool(forKey: Self.thinkingEnabledKey)
+            && Self.supportsThinkingToggle(model: config.model, baseURL: config.baseURL)
+        let aiTimeout = Self.aiTimeout(forInputLength: text.count, thinkingEnabled: thinkingEnabled)
         let requestID = UUID()
-        let maxOutputTokens = Self.maxOutputTokens(forInputLength: text.count)
+        let maxOutputTokens = Self.maxOutputTokens(
+            forInputLength: text.count,
+            thinkingEnabled: thinkingEnabled
+        )
         requestQueue.async {
             self.cancelActiveRequest()
             self.activeRequestID = requestID
@@ -146,6 +150,7 @@ final class MiniMaxService: @unchecked Sendable {
                 prompt: prompt,
                 temperature: 0.0,
                 maxOutputTokens: maxOutputTokens,
+                thinkingEnabled: thinkingEnabled,
                 retryCount: 0,
                 requestID: requestID
             ) { [weak self] result in
@@ -335,15 +340,27 @@ final class MiniMaxService: @unchecked Sendable {
         DispatchQueue.main.async { completion?(result) }
     }
 
-    static func maxOutputTokens(forInputLength length: Int) -> Int {
-        max(256, min(16_384, length * 2 + 128))
+    static func maxOutputTokens(forInputLength length: Int, thinkingEnabled: Bool = false) -> Int {
+        if thinkingEnabled {
+            return max(2_048, min(16_384, length * 4 + 1_024))
+        }
+        return max(256, min(16_384, length * 2 + 128))
     }
 
-    static func shouldDisableThinking(model: String, baseURL: String) -> Bool {
+    static func aiTimeout(forInputLength length: Int, thinkingEnabled: Bool) -> TimeInterval {
+        guard thinkingEnabled else { return 20 }
+        return min(60, 45 + Double(max(0, length - 1_000)) / 500)
+    }
+
+    static func supportsThinkingToggle(model: String, baseURL: String) -> Bool {
         let normalizedModel = model.lowercased()
         let normalizedURL = baseURL.lowercased()
         return normalizedModel.hasPrefix("deepseek-v4-")
             && (normalizedURL.contains("dashscope.aliyuncs.com") || normalizedURL.contains(".maas.aliyuncs.com"))
+    }
+
+    static func thinkingRequestValue(requested: Bool, model: String, baseURL: String) -> Bool? {
+        supportsThinkingToggle(model: model, baseURL: baseURL) ? requested : nil
     }
 
     // MARK: - 核心请求（OpenAI 兼容格式）
@@ -352,6 +369,7 @@ final class MiniMaxService: @unchecked Sendable {
         prompt: String,
         temperature: Double,
         maxOutputTokens: Int,
+        thinkingEnabled: Bool,
         retryCount: Int,
         requestID: UUID,
         completion: @escaping (Result<String, Error>) -> Void
@@ -382,8 +400,12 @@ final class MiniMaxService: @unchecked Sendable {
             "temperature": temperature,
             "max_tokens": maxOutputTokens
         ]
-        if Self.shouldDisableThinking(model: config.model, baseURL: config.baseURL) {
-            body["enable_thinking"] = false
+        if let thinkingValue = Self.thinkingRequestValue(
+            requested: thinkingEnabled,
+            model: config.model,
+            baseURL: config.baseURL
+        ) {
+            body["enable_thinking"] = thinkingValue
         }
 
         do {
@@ -414,7 +436,7 @@ final class MiniMaxService: @unchecked Sendable {
                     print("Spoken: [DEBUG] Retrying... (attempt \(retryCount + 1))")
                     self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                         guard self.activeRequestID == requestID else { return }
-                        self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                        self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                     }
                     return
                 }
@@ -444,7 +466,7 @@ final class MiniMaxService: @unchecked Sendable {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                             guard self.activeRequestID == requestID else { return }
-                            self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                            self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                         }
                         return
                     }
@@ -460,7 +482,7 @@ final class MiniMaxService: @unchecked Sendable {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                             guard self.activeRequestID == requestID else { return }
-                            self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                            self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                         }
                         return
                     }

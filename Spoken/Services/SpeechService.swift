@@ -70,6 +70,11 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     private var retryWorkItem: DispatchWorkItem?
 
+    /// CoreAudio 在上一段采集刚结束时，偶尔会短暂拒绝启动新的引擎。
+    /// 这是可恢复的设备就绪问题，不应第一次失败就直接反馈给用户。
+    private let audioEngineStartMaxAttempts = 4
+    private let audioEngineStartRetryDelays: [TimeInterval] = [0.15, 0.35, 0.8]
+
     /// 长时间未录音后，强制重建 AVAudioEngine，避免旧实例在闲置后进入“活死人”状态
     private let audioEngineIdleResetSec: TimeInterval = 300.0
     private var lastRecordingEndTime: Date?
@@ -390,8 +395,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - 云端识别
 
-    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onCaptureReady: @escaping () -> Void, allowFallback: Bool = false, sessionID: UUID) {
-        logInfo("startCloudRecording called, allowFallback=\(allowFallback)")
+    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onCaptureReady: @escaping () -> Void, allowFallback: Bool = false, sessionID: UUID, audioStartAttempt: Int = 0) {
+        logInfo("startCloudRecording called, allowFallback=\(allowFallback), audioStartAttempt=\(audioStartAttempt + 1)")
         resetAudioEngine()
 
         resetAudioReceived(for: sessionID)
@@ -526,7 +531,16 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         } catch {
             logError("Audio engine failed to start: \(error)")
             CloudSpeechService.shared.disconnect()
-            if allowFallback {
+            if scheduleCloudAudioEngineRetry(
+                onPartial: onPartial,
+                onFinal: onFinal,
+                onCaptureReady: onCaptureReady,
+                allowFallback: allowFallback,
+                sessionID: sessionID,
+                failedAttempt: audioStartAttempt
+            ) {
+                return
+            } else if allowFallback {
                 logInfo("auto fallback to local")
                 currentProvider = .local
                 installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
@@ -541,14 +555,52 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     }
 
+    /// 重新建立云端逻辑会话前先彻底替换音频引擎，避免复用处于失败状态的 inputNode。
+    /// 返回 true 表示已经安排下一次尝试；false 表示已耗尽重试次数。
+    private func scheduleCloudAudioEngineRetry(
+        onPartial: @escaping (String) -> Void,
+        onFinal: @escaping (String) -> Void,
+        onCaptureReady: @escaping () -> Void,
+        allowFallback: Bool,
+        sessionID: UUID,
+        failedAttempt: Int
+    ) -> Bool {
+        let nextAttempt = failedAttempt + 1
+        guard nextAttempt < audioEngineStartMaxAttempts else {
+            logError("Cloud audio engine failed after \(audioEngineStartMaxAttempts) attempts")
+            return false
+        }
+
+        let delay = audioEngineStartRetryDelays[min(failedAttempt, audioEngineStartRetryDelays.count - 1)]
+        logWarn("Cloud audio engine start failed; rebuilding and retrying in \(Int(delay * 1000))ms (attempt \(nextAttempt + 1)/\(audioEngineStartMaxAttempts))")
+        rebuildAudioEngine()
+        state = .starting
+
+        retryWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.isActiveSession(sessionID), self.state == .starting else { return }
+            self.startCloudRecording(
+                onPartial: onPartial,
+                onFinal: onFinal,
+                onCaptureReady: onCaptureReady,
+                allowFallback: allowFallback,
+                sessionID: sessionID,
+                audioStartAttempt: nextAttempt
+            )
+        }
+        retryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        return true
+    }
+
     private func installTapAndStart(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onCaptureReady: @escaping () -> Void, sessionID: UUID) {
-        let maxRetries = 3
-        let retryDelays: [TimeInterval] = [0.2, 0.5, 1.0]
+        let maxAttempts = audioEngineStartMaxAttempts
+        let retryDelays = audioEngineStartRetryDelays
 
         func attemptStart(retryCount: Int) {
             guard isActiveSession(sessionID) else { return }
-            guard retryCount < maxRetries else {
-                logError("Failed to start recording after \(maxRetries) retries")
+            guard retryCount < maxAttempts else {
+                logError("Failed to start recording after \(maxAttempts) attempts")
                 failStart("录音通道启动失败，请重试", sessionID: sessionID)
                 return
             }
@@ -629,7 +681,20 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                 PipelineLatencyMetrics.shared.mark(.audioEngineStarted)
             } catch {
                 logError("Audio engine failed to start: \(error)")
-                failStart("音频引擎启动失败", sessionID: sessionID)
+                let nextRetryCount = retryCount + 1
+                guard nextRetryCount < maxAttempts else {
+                    failStart("音频引擎启动失败，请检查麦克风是否被其他应用占用", sessionID: sessionID)
+                    return
+                }
+                let delay = retryDelays[min(retryCount, retryDelays.count - 1)]
+                logWarn("Local audio engine start failed; rebuilding and retrying in \(Int(delay * 1000))ms (attempt \(nextRetryCount + 1)/\(maxAttempts))")
+                rebuildAudioEngine()
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self, self.isActiveSession(sessionID), self.state == .starting else { return }
+                    attemptStart(retryCount: nextRetryCount)
+                }
+                self.retryWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
                 return
             }
 

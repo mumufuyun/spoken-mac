@@ -104,17 +104,33 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertEqual(distribution.p95, 0.5, accuracy: 0.0001)
     }
 
-    func testDeepSeekDashScopeRequestsDisableThinking() {
-        XCTAssertTrue(MiniMaxService.shouldDisableThinking(
+    func testDeepSeekDashScopeThinkingConfiguration() {
+        XCTAssertTrue(MiniMaxService.supportsThinkingToggle(
             model: "deepseek-v4-flash-0731",
             baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ))
-        XCTAssertFalse(MiniMaxService.shouldDisableThinking(
+        XCTAssertEqual(MiniMaxService.thinkingRequestValue(
+            requested: false,
+            model: "deepseek-v4-flash-0731",
+            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ), false)
+        XCTAssertEqual(MiniMaxService.thinkingRequestValue(
+            requested: true,
+            model: "deepseek-v4-flash-0731",
+            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ), true)
+        XCTAssertNil(MiniMaxService.thinkingRequestValue(
+            requested: true,
             model: "MiniMax-M2.5",
             baseURL: "https://api.minimax.chat/v1"
         ))
         XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 20), 256)
         XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 2_000), 4_128)
         XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 20_000), 16_384)
+        XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 20, thinkingEnabled: true), 2_048)
+        XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 2_000, thinkingEnabled: true), 9_024)
+        XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 500, thinkingEnabled: false), 20)
+        XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 500, thinkingEnabled: true), 45)
+        XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 10_000, thinkingEnabled: true), 60)
     }
 }
