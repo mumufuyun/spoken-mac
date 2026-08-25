@@ -119,14 +119,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             let hostingController = NSHostingController(rootView: SettingsView())
             let newWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 640, height: 600),
+                contentRect: NSRect(x: 0, y: 0, width: 860, height: 650),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             newWindow.title = "Spoken 设置"
             newWindow.contentViewController = hostingController
-            newWindow.minSize = NSSize(width: 540, height: 520)
+            newWindow.minSize = NSSize(width: 720, height: 540)
             newWindow.isReleasedWhenClosed = false
             newWindow.collectionBehavior.insert(.moveToActiveSpace)
             if !newWindow.setFrameUsingName("SpokenSettingsWindow") {

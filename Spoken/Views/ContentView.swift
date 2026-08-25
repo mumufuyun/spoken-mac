@@ -170,15 +170,29 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .modelConfig: return "模型"
-        case .speechConfig: return "语音"
-        case .personalContext: return "背景"
-        case .casualChat: return "日常"
-        case .workMessage: return "工作"
-        case .formalDocument: return "材料"
-        case .meetingNotes: return "会议"
-        case .contentShare: return "分享"
+        case .modelConfig: return "AI 模型"
+        case .speechConfig: return "语音识别"
+        case .personalContext: return "个人背景"
+        case .casualChat: return "日常沟通"
+        case .workMessage: return "工作沟通"
+        case .formalDocument: return "正式材料"
+        case .meetingNotes: return "会议记录"
+        case .contentShare: return "内容分享"
         case .aiInstruction: return "AI 指令"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .modelConfig: return "配置转录后处理使用的模型服务、地址和访问密钥。"
+        case .speechConfig: return "选择本地或云端识别，并查看云端稳定性与全流程延迟。"
+        case .personalContext: return "提供长期背景和表达偏好，帮助 AI 更准确地理解术语与语境。"
+        case .casualChat: return "调整微信、聊天等日常交流场景的文本整理方式。"
+        case .workMessage: return "调整面向同事、管理层和合作方的工作沟通表达。"
+        case .formalDocument: return "调整方案、汇报、复盘等正式工作材料的整理规则。"
+        case .meetingNotes: return "调整会议口述、讨论纪要和行动信息的整理规则。"
+        case .contentShare: return "调整自媒体、观点分享和公开内容的表达方式。"
+        case .aiInstruction: return "将口述内容整理为清晰、可直接交给 AI 的指令。"
         }
     }
 
@@ -207,10 +221,21 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .modelConfig, .speechConfig, .personalContext: return nil
         }
     }
+
+    static let serviceSections: [SettingsSection] = [.speechConfig, .modelConfig]
+    static let personalizationSections: [SettingsSection] = [.personalContext]
+    static let sceneSections: [SettingsSection] = [
+        .casualChat,
+        .workMessage,
+        .formalDocument,
+        .meetingNotes,
+        .contentShare,
+        .aiInstruction
+    ]
 }
 
 struct SettingsView: View {
-    @State private var selectedSection: SettingsSection = .modelConfig
+    @State private var selectedSection: SettingsSection = .speechConfig
     @State private var apiKey: String = ""
     @State private var promptText: String = ""
     @State private var personalContextText: String = ""
@@ -218,91 +243,32 @@ struct SettingsView: View {
     @State private var saved = false
     @State private var revertedToDefault = false
     
-    private let textPrimary = Color(hex: "#000000")
-    private let textSecondary = Color(hex: "#4e4e4e")
-    private let textMuted = Color(hex: "#777169")
-    private let warmStone = Color(hex: "#f5f2ef")
-    
     var body: some View {
-        VStack(spacing: 0) {
-            // 标题栏
-            HStack {
-                Text("设置")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(textPrimary)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
-            
-            Divider()
-                .padding(.horizontal, 20)
-            
-            // 分类切换按钮（pill 风格，对齐主应用）
-            VStack(spacing: 5) {
-                HStack(spacing: 5) {
-                    ForEach([SettingsSection.modelConfig, .speechConfig, .personalContext], id: \.self) { section in
-                        SettingsTabButton(section: section, current: $selectedSection)
-                    }
-                }
-                HStack(spacing: 5) {
-                    ForEach([SettingsSection.casualChat, .workMessage, .formalDocument, .meetingNotes], id: \.self) { section in
-                        SettingsTabButton(section: section, current: $selectedSection)
-                    }
-                }
-                HStack(spacing: 5) {
-                    ForEach([SettingsSection.contentShare, .aiInstruction], id: \.self) { section in
-                        SettingsTabButton(section: section, current: $selectedSection)
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+        HStack(spacing: 0) {
+            SettingsSidebar(selectedSection: $selectedSection)
 
             Divider()
-                .padding(.horizontal, 20)
 
-            // 内容区域
-            ScrollView {
-                if selectedSection == .modelConfig {
-                    ModelConfigSectionView(apiKey: $apiKey, saved: $saved)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                } else if selectedSection == .speechConfig {
-                    SpeechConfigSectionView()
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                } else if selectedSection == .personalContext {
-                    PersonalContextSectionView(
-                        contextText: $personalContextText,
-                        isEnabled: $personalContextEnabled,
-                        saved: $saved
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                } else {
-                    PromptSectionView(
-                        section: selectedSection,
-                        promptText: $promptText,
-                        saved: $saved,
-                        revertedToDefault: $revertedToDefault
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                }
+            VStack(spacing: 0) {
+                SettingsPageHeader(section: selectedSection)
+
+                Divider()
+
+                settingsContent
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 20)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white)
         }
         .frame(
-            minWidth: 540,
-            idealWidth: 640,
+            minWidth: 720,
+            idealWidth: 860,
             maxWidth: .infinity,
-            minHeight: 520,
-            idealHeight: 600,
+            minHeight: 540,
+            idealHeight: 650,
             maxHeight: .infinity
         )
-        .background(Color.white)
         .onAppear {
             loadSectionData(selectedSection)
         }
@@ -310,6 +276,28 @@ struct SettingsView: View {
             loadSectionData(newSection)
             saved = false
             revertedToDefault = false
+        }
+    }
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        if selectedSection == .modelConfig {
+            ModelConfigSectionView(apiKey: $apiKey, saved: $saved)
+        } else if selectedSection == .speechConfig {
+            SpeechConfigSectionView()
+        } else if selectedSection == .personalContext {
+            PersonalContextSectionView(
+                contextText: $personalContextText,
+                isEnabled: $personalContextEnabled,
+                saved: $saved
+            )
+        } else {
+            PromptSectionView(
+                section: selectedSection,
+                promptText: $promptText,
+                saved: $saved,
+                revertedToDefault: $revertedToDefault
+            )
         }
     }
     
@@ -336,35 +324,140 @@ struct SettingsView: View {
     }
 }
 
-struct SettingsTabButton: View {
-    let section: SettingsSection
-    @Binding var current: SettingsSection
-    
-    private let warmStone = Color(hex: "#f5f2ef")
-    private let textPrimary = Color(hex: "#000000")
-    private let textSecondary = Color(hex: "#4e4e4e")
-    
+struct SettingsSidebar: View {
+    @Binding var selectedSection: SettingsSection
+
     var body: some View {
-        Button(action: {
-            current = section
-        }) {
-            HStack(spacing: 4) {
-                Image(systemName: section.icon)
-                    .font(.system(size: 10))
-                Text(section.title)
-                    .font(.system(size: 11, weight: current == section ? .semibold : .regular))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 25))
+                    .foregroundColor(Color(hex: "#4a90d9"))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Spoken")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("设置")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#777169"))
+                }
             }
-            .foregroundColor(current == section ? .white : textSecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(current == section ? textPrimary : warmStone)
-            .cornerRadius(9999)
-            .shadow(
-                color: Color(hex: "#4e3220").opacity(current == section ? 0.12 : 0),
-                radius: 3, x: 0, y: 1
+            .padding(.horizontal, 18)
+            .padding(.top, 20)
+            .padding(.bottom, 18)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    SettingsSidebarGroup(
+                        title: "连接与服务",
+                        sections: SettingsSection.serviceSections,
+                        selectedSection: $selectedSection
+                    )
+                    SettingsSidebarGroup(
+                        title: "个性化",
+                        sections: SettingsSection.personalizationSections,
+                        selectedSection: $selectedSection
+                    )
+                    SettingsSidebarGroup(
+                        title: "AI 处理场景",
+                        sections: SettingsSection.sceneSections,
+                        selectedSection: $selectedSection
+                    )
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 18)
+            }
+        }
+        .frame(width: 210)
+        .frame(maxHeight: .infinity)
+        .background(Color(hex: "#f5f2ef"))
+    }
+}
+
+struct SettingsSidebarGroup: View {
+    let title: String
+    let sections: [SettingsSection]
+    @Binding var selectedSection: SettingsSection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.35)
+                .foregroundColor(Color(hex: "#777169"))
+                .padding(.horizontal, 9)
+                .padding(.bottom, 2)
+
+            ForEach(sections) { section in
+                SettingsSidebarRow(
+                    section: section,
+                    isSelected: selectedSection == section,
+                    action: { selectedSection = section }
+                )
+            }
+        }
+    }
+}
+
+struct SettingsSidebarRow: View {
+    let section: SettingsSection
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 18)
+
+                Text(section.title)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(isSelected ? Color(hex: "#245f9e") : Color(hex: "#4e4e4e"))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(isSelected ? Color.white : Color.clear)
+                    .shadow(
+                        color: Color.black.opacity(isSelected ? 0.05 : 0),
+                        radius: 2,
+                        x: 0,
+                        y: 1
+                    )
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct SettingsPageHeader: View {
+    let section: SettingsSection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 9) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(Color(hex: "#4a90d9"))
+                Text(section.title)
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundColor(Color(hex: "#000000"))
+            }
+
+            Text(section.description)
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "#777169"))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 17)
+        .background(Color.white)
     }
 }
 
