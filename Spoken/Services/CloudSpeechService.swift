@@ -231,6 +231,7 @@ enum CloudSpeechError: LocalizedError {
     case invalidURL
     case timeout
     case connectionFailed
+    case recognitionStalled
     case apiError(String)
     case providerNotFound(String)
 
@@ -240,6 +241,7 @@ enum CloudSpeechError: LocalizedError {
         case .invalidURL: return "无效的 WebSocket URL"
         case .timeout: return "连接超时"
         case .connectionFailed: return "连接失败"
+        case .recognitionStalled: return "云端识别无响应"
         case .apiError(let msg): return "API 错误: \(msg)"
         case .providerNotFound(let id): return "未找到 Provider: \(id)"
         }

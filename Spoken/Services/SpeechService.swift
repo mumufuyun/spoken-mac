@@ -67,6 +67,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private var activeSessionID: UUID?
     private var acceptsSessionAudio = false
     private var sessionAudioReceived = false
+    private var sessionCloudReady = false
+    private var sessionCaptureReadyNotified = false
 
     private var retryWorkItem: DispatchWorkItem?
 
@@ -82,6 +84,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private var currentProvider: SpeechRecognitionProvider = .local
     private var isUsingCloud = false
     var onCloudConnected: (() -> Void)?
+    var onCloudPreparing: (() -> Void)?
     var onCloudConnectionFailed: ((String) -> Void)?
     private var cancellables = Set<AnyCancellable>()
 
@@ -95,6 +98,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         activeSessionID = id
         acceptsSessionAudio = true
         sessionAudioReceived = false
+        sessionCloudReady = false
+        sessionCaptureReadyNotified = false
         sessionLock.unlock()
         return id
     }
@@ -139,6 +144,46 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         sessionLock.unlock()
     }
 
+    private func resetCloudCaptureReadiness(for id: UUID) {
+        sessionLock.lock()
+        if activeSessionID == id {
+            sessionAudioReceived = false
+            sessionCloudReady = false
+            sessionCaptureReadyNotified = false
+        }
+        sessionLock.unlock()
+    }
+
+    private func markCloudReadyAndShouldNotify(for id: UUID) -> Bool {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        guard activeSessionID == id else { return false }
+        sessionCloudReady = true
+        guard sessionAudioReceived, !sessionCaptureReadyNotified else { return false }
+        sessionCaptureReadyNotified = true
+        return true
+    }
+
+    private func markCloudPreparing(for id: UUID) {
+        sessionLock.lock()
+        if activeSessionID == id {
+            sessionCloudReady = false
+            sessionCaptureReadyNotified = false
+        }
+        sessionLock.unlock()
+    }
+
+    private func cloudCaptureBecameReadyAfterAudio(for id: UUID) -> Bool {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        guard activeSessionID == id,
+              sessionAudioReceived,
+              sessionCloudReady,
+              !sessionCaptureReadyNotified else { return false }
+        sessionCaptureReadyNotified = true
+        return true
+    }
+
     private func stopAcceptingAudio(for id: UUID) {
         sessionLock.lock()
         if activeSessionID == id { acceptsSessionAudio = false }
@@ -154,6 +199,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         activeSessionID = nil
         acceptsSessionAudio = false
         sessionAudioReceived = false
+        sessionCloudReady = false
+        sessionCaptureReadyNotified = false
         return hadSession
     }
 
@@ -345,6 +392,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     func startRecording(
         onPartial: @escaping (String) -> Void,
         onFinal: @escaping (String) -> Void,
+        onAudioBuffered: @escaping () -> Void = {},
         onCaptureReady: @escaping () -> Void = {},
         onStartFailure: @escaping (String) -> Void = { _ in }
     ) -> Bool {
@@ -374,9 +422,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         case .local:
             installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
         case .cloud:
-            startCloudRecording(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
+            startCloudRecording(onPartial: onPartial, onFinal: onFinal, onAudioBuffered: onAudioBuffered, onCaptureReady: onCaptureReady, sessionID: sessionID)
         case .auto:
-            startCloudRecording(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, allowFallback: true, sessionID: sessionID)
+            startCloudRecording(onPartial: onPartial, onFinal: onFinal, onAudioBuffered: onAudioBuffered, onCaptureReady: onCaptureReady, allowFallback: true, sessionID: sessionID)
         }
 
         return true
@@ -395,11 +443,11 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - 云端识别
 
-    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onCaptureReady: @escaping () -> Void, allowFallback: Bool = false, sessionID: UUID, audioStartAttempt: Int = 0) {
+    private func startCloudRecording(onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onAudioBuffered: @escaping () -> Void, onCaptureReady: @escaping () -> Void, allowFallback: Bool = false, sessionID: UUID, audioStartAttempt: Int = 0) {
         logInfo("startCloudRecording called, allowFallback=\(allowFallback), audioStartAttempt=\(audioStartAttempt + 1)")
         resetAudioEngine()
 
-        resetAudioReceived(for: sessionID)
+        resetCloudCaptureReadiness(for: sessionID)
         state = .starting
         lastRecognizedText = ""
         capturedOnPartial = onPartial
@@ -427,7 +475,11 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         CloudSpeechService.shared.onConnected = { [weak self] in
             guard let self, self.isActiveSession(sessionID) else { return }
             self.logInfo("CloudSpeechService session ready")
-            DispatchQueue.main.async { self.onCloudConnected?() }
+            let shouldNotifyCaptureReady = self.markCloudReadyAndShouldNotify(for: sessionID)
+            DispatchQueue.main.async {
+                self.onCloudConnected?()
+                if shouldNotifyCaptureReady { onCaptureReady() }
+            }
         }
 
         cancellables.removeAll()
@@ -436,7 +488,10 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             .removeDuplicates()
             .sink { [weak self] state in
                 guard let self, self.isActiveSession(sessionID) else { return }
-                if case .failed(let reason) = state {
+                if case .connecting = state {
+                    self.markCloudPreparing(for: sessionID)
+                    self.onCloudPreparing?()
+                } else if case .failed(let reason) = state {
                     self.logWarn("Cloud connection failed: \(reason)")
                     self.onCloudConnectionFailed?(reason)
                 }
@@ -486,6 +541,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
             CloudSpeechService.shared.sendAudio(pcmData)
             if isFirstAudioFrame {
+                DispatchQueue.main.async(execute: onAudioBuffered)
+            }
+            if self.cloudCaptureBecameReadyAfterAudio(for: sessionID) {
                 DispatchQueue.main.async(execute: onCaptureReady)
             }
         }
@@ -500,6 +558,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                     let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
                     CloudSpeechService.shared.sendAudio(pcmData)
                     if isFirstAudioFrame {
+                        DispatchQueue.main.async(execute: onAudioBuffered)
+                    }
+                    if self.cloudCaptureBecameReadyAfterAudio(for: sessionID) {
                         DispatchQueue.main.async(execute: onCaptureReady)
                     }
                 }
@@ -534,6 +595,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             if scheduleCloudAudioEngineRetry(
                 onPartial: onPartial,
                 onFinal: onFinal,
+                onAudioBuffered: onAudioBuffered,
                 onCaptureReady: onCaptureReady,
                 allowFallback: allowFallback,
                 sessionID: sessionID,
@@ -560,6 +622,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private func scheduleCloudAudioEngineRetry(
         onPartial: @escaping (String) -> Void,
         onFinal: @escaping (String) -> Void,
+        onAudioBuffered: @escaping () -> Void,
         onCaptureReady: @escaping () -> Void,
         allowFallback: Bool,
         sessionID: UUID,
@@ -582,6 +645,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             self.startCloudRecording(
                 onPartial: onPartial,
                 onFinal: onFinal,
+                onAudioBuffered: onAudioBuffered,
                 onCaptureReady: onCaptureReady,
                 allowFallback: allowFallback,
                 sessionID: sessionID,

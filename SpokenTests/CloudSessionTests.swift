@@ -86,14 +86,38 @@ final class CloudSessionTests: XCTestCase {
             hasTransport: true,
             hasMissedHeartbeat: true
         ))
-        XCTAssertTrue(WarmConnectionReusePolicy.canReuse(
-            age: 24 * 60 * 60,
-            maxAge: nil,
+        XCTAssertFalse(WarmConnectionReusePolicy.canReuse(
+            age: 6 * 60,
+            maxAge: 120,
             sameAPIKey: true,
             sameModel: true,
             hasTransport: true,
             hasMissedHeartbeat: false
         ))
+    }
+
+    func testQwenSessionBecomesReadyOnlyAfterUpdateAcknowledgement() {
+        XCTAssertEqual(
+            QwenSessionHandshakePolicy.action(for: "session.created"),
+            .sendSessionUpdate
+        )
+        XCTAssertEqual(
+            QwenSessionHandshakePolicy.action(for: "session.updated"),
+            .markReady
+        )
+        XCTAssertEqual(
+            QwenSessionHandshakePolicy.action(for: "conversation.item.input_audio_transcription.text"),
+            .ignore
+        )
+    }
+
+    func testPCMVoiceActivityDetectorRejectsSilenceAndDetectsSpeech() {
+        XCTAssertFalse(PCMVoiceActivityDetector.containsMeaningfulSpeech(Data(repeating: 0, count: 4_096)))
+
+        var samples = [Int16](repeating: 0, count: 2_048)
+        for index in 0..<64 { samples[index] = index.isMultiple(of: 2) ? 2_000 : -2_000 }
+        let speechData = samples.withUnsafeBytes { Data($0) }
+        XCTAssertTrue(PCMVoiceActivityDetector.containsMeaningfulSpeech(speechData))
     }
 
     func testLatencyDistributionUsesNearestRankPercentiles() {

@@ -30,19 +30,59 @@ enum CloudRecognitionResultResolver {
 struct WarmConnectionReusePolicy {
     static func canReuse(
         age: TimeInterval,
-        maxAge: TimeInterval?,
+        maxAge: TimeInterval,
         sameAPIKey: Bool,
         sameModel: Bool,
         hasTransport: Bool,
         hasMissedHeartbeat: Bool
     ) -> Bool {
-        let isWithinAllowedAge = maxAge.map { age <= $0 } ?? true
         return age >= 0
-            && isWithinAllowedAge
+            && age <= maxAge
             && sameAPIKey
             && sameModel
             && hasTransport
             && !hasMissedHeartbeat
+    }
+}
+
+enum QwenSessionHandshakeAction: Equatable {
+    case sendSessionUpdate
+    case markReady
+    case ignore
+}
+
+struct QwenSessionHandshakePolicy {
+    static func action(for eventType: String) -> QwenSessionHandshakeAction {
+        switch eventType {
+        case "session.created": .sendSessionUpdate
+        case "session.updated": .markReady
+        default: .ignore
+        }
+    }
+}
+
+struct PCMVoiceActivityDetector {
+    static func containsMeaningfulSpeech(
+        _ data: Data,
+        amplitudeThreshold: Int = 700,
+        minimumActiveRatio: Double = 0.01
+    ) -> Bool {
+        guard data.count >= 2 else { return false }
+        return data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            let sampleCount = bytes.count / 2
+            let requiredActiveSamples = max(1, Int(ceil(Double(sampleCount) * minimumActiveRatio)))
+            var activeSamples = 0
+            for index in stride(from: 0, to: sampleCount * 2, by: 2) {
+                let bits = UInt16(bytes[index]) | (UInt16(bytes[index + 1]) << 8)
+                let amplitude = abs(Int(Int16(bitPattern: bits)))
+                if amplitude >= amplitudeThreshold {
+                    activeSamples += 1
+                    if activeSamples >= requiredActiveSamples { return true }
+                }
+            }
+            return false
+        }
     }
 }
 
@@ -71,6 +111,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private let warmRecoveryDelays: [TimeInterval] = [1, 2, 5, 10, 30]
     private let connectTimeout: TimeInterval = 5
     private let finishTimeout: TimeInterval = 8
+    private let warmConnectionMaxAge: TimeInterval = 120
+    private let firstTranscriptTimeout: TimeInterval = 3
+    private let maxTranscriptRecoveryAttempts = 1
 
     private var apiKey = ""
     private var model = ""
@@ -97,6 +140,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private var connectionStartedAt: TimeInterval?
     private var isWarmTransport = false
     private var hasPublishedFirstPartial = false
+    private var hasMeaningfulSpeech = false
+    private var transcriptRecoveryAttempts = 0
+    private var firstTranscriptTimeoutItem: DispatchWorkItem?
 
     private var partialCallback: ((String) -> Void)?
     private var finalCallback: ((String) -> Void)?
@@ -155,6 +201,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
                 self.commitSent = false
                 self.sessionFinishSent = false
                 self.hasPublishedFirstPartial = false
+                self.hasMeaningfulSpeech = false
+                self.transcriptRecoveryAttempts = 0
+                self.cancelFirstTranscriptTimeout()
                 ASRStabilityMetrics.shared.recordSessionStarted()
                 Self.logger.info("session=\(self.shortSessionID) adopted warm connection ready=\(self.sessionReady)")
                 if self.sessionReady {
@@ -185,6 +234,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             self.isWarmTransport = false
             self.warmRecoveryAttempt = 0
             self.hasPublishedFirstPartial = false
+            self.hasMeaningfulSpeech = false
+            self.transcriptRecoveryAttempts = 0
+            self.cancelFirstTranscriptTimeout()
 
             Self.logger.info("session=\(self.shortSessionID) starting fresh connection")
             ASRStabilityMetrics.shared.recordSessionStarted()
@@ -216,6 +268,9 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             self.connectionStartedAt = ProcessInfo.processInfo.systemUptime
             self.isWarmTransport = true
             self.hasPublishedFirstPartial = false
+            self.hasMeaningfulSpeech = false
+            self.transcriptRecoveryAttempts = 0
+            self.cancelFirstTranscriptTimeout()
             self.warmRecoveryAttempt = 0
             Self.logger.info("session=\(self.shortSessionID) starting persistent warm connection")
             self.startConnectionAttempt()
@@ -235,6 +290,12 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         stateQueue.async {
             guard self.partialCallback != nil else { return }
             self.appendReplayBuffer(data)
+            if !self.hasMeaningfulSpeech,
+               PCMVoiceActivityDetector.containsMeaningfulSpeech(data) {
+                self.hasMeaningfulSpeech = true
+                Self.logger.info("session=\(self.shortSessionID) meaningful speech detected")
+                self.scheduleFirstTranscriptTimeoutIfNeeded()
+            }
             if self.sessionReady, let task = self.webSocketTask {
                 self.sendAudioData(data, task: task)
             } else {
@@ -279,6 +340,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private func startConnectionAttempt() {
         assertOnStateQueue()
         cancelConnectTimeout()
+        cancelFirstTranscriptTimeout()
         stopHeartbeat()
         sessionReady = false
         sessionUpdateSent = false
@@ -316,6 +378,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         guard !intentionallyClosing else { return }
 
         cancelConnectTimeout()
+        cancelFirstTranscriptTimeout()
         stopHeartbeat()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         currentSession?.invalidateAndCancel()
@@ -366,6 +429,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         cancelConnectTimeout()
         cancelFinishTimeout()
         cancelWarmRecovery()
+        cancelFirstTranscriptTimeout()
         stopHeartbeat()
 
         let task = webSocketTask
@@ -393,6 +457,8 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
             isWarmTransport = false
             warmRecoveryAttempt = 0
             hasPublishedFirstPartial = false
+            hasMeaningfulSpeech = false
+            transcriptRecoveryAttempts = 0
         }
 
         if notifyDisconnected {
@@ -531,8 +597,13 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else { return }
 
-        switch type {
-        case "session.created":
+        switch QwenSessionHandshakePolicy.action(for: type) {
+        case .sendSessionUpdate:
+            Self.logger.info("session=\(shortSessionID) session.created; sending session.update")
+            sendSessionUpdate(task: task)
+            return
+
+        case .markReady:
             sessionReady = true
             cancelConnectTimeout()
             cancelWarmRecovery()
@@ -544,8 +615,15 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
                 PipelineLatencyMetrics.shared.mark(.asrConnected)
             }
             flushPendingAudio()
+            scheduleFirstTranscriptTimeoutIfNeeded()
             if finishRequested { sendCommit(task: task) }
+            return
 
+        case .ignore:
+            break
+        }
+
+        switch type {
         case "conversation.item.input_audio_transcription.text":
             let confirmed = json["text"] as? String ?? ""
             let stash = json["stash"] as? String ?? ""
@@ -588,6 +666,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         accumulatedText = text
         if !hasPublishedFirstPartial {
             hasPublishedFirstPartial = true
+            cancelFirstTranscriptTimeout()
             PipelineLatencyMetrics.shared.mark(.firstASRPartial)
         }
         let callback = partialCallback
@@ -647,6 +726,60 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         stateQueue.asyncAfter(deadline: .now() + finishTimeout, execute: item)
     }
 
+    private func scheduleFirstTranscriptTimeoutIfNeeded() {
+        assertOnStateQueue()
+        guard sessionReady,
+              hasMeaningfulSpeech,
+              !hasPublishedFirstPartial,
+              !finishRequested,
+              partialCallback != nil,
+              firstTranscriptTimeoutItem == nil else { return }
+        let expectedSessionID = sessionID
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.firstTranscriptTimeoutItem = nil
+            guard
+                  self.sessionID == expectedSessionID,
+                  self.sessionReady,
+                  self.hasMeaningfulSpeech,
+                  !self.hasPublishedFirstPartial,
+                  !self.finishRequested,
+                  self.partialCallback != nil else { return }
+            self.recoverFromTranscriptStall()
+        }
+        firstTranscriptTimeoutItem = item
+        stateQueue.asyncAfter(deadline: .now() + firstTranscriptTimeout, execute: item)
+    }
+
+    private func cancelFirstTranscriptTimeout() {
+        firstTranscriptTimeoutItem?.cancel()
+        firstTranscriptTimeoutItem = nil
+    }
+
+    private func recoverFromTranscriptStall() {
+        assertOnStateQueue()
+        guard transcriptRecoveryAttempts < maxTranscriptRecoveryAttempts else {
+            Self.logger.error("session=\(shortSessionID) recognition still stalled after replay recovery")
+            failPermanently(CloudSpeechError.recognitionStalled)
+            return
+        }
+
+        transcriptRecoveryAttempts += 1
+        let bufferedAudio = replayBuffer.buffers
+        Self.logger.warning(
+            "session=\(shortSessionID) no transcript after meaningful speech; reconnecting and replaying bytes=\(replayBuffer.byteCount)"
+        )
+        ASRStabilityMetrics.shared.recordReconnect()
+        closeTransport(clearBusinessState: false, notifyDisconnected: false)
+        pendingAudioBuffers = bufferedAudio
+        sessionID = UUID()
+        retryCount = 0
+        intentionallyClosing = false
+        connectionStartedAt = ProcessInfo.processInfo.systemUptime
+        isWarmTransport = false
+        startConnectionAttempt()
+    }
+
     private func cancelFinishTimeout() {
         finishTimeoutItem?.cancel()
         finishTimeoutItem = nil
@@ -658,7 +791,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         let age = ProcessInfo.processInfo.systemUptime - connectionStartedAt
         return isWarmTransport && WarmConnectionReusePolicy.canReuse(
             age: age,
-            maxAge: nil,
+            maxAge: warmConnectionMaxAge,
             sameAPIKey: self.apiKey == apiKey,
             sameModel: self.model == model,
             hasTransport: webSocketTask != nil,
@@ -783,7 +916,6 @@ extension ReliableQwenSpeechProvider: URLSessionWebSocketDelegate {
             guard self.webSocketTask === webSocketTask else { return }
             Self.logger.info("session=\(self.shortSessionID) websocket opened")
             self.startHeartbeat(task: webSocketTask)
-            self.sendSessionUpdate(task: webSocketTask)
             self.receiveNext(task: webSocketTask)
         }
     }

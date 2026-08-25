@@ -459,6 +459,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 class RecordingViewModel: ObservableObject {
     @Published var isRecording = false
     @Published var isCaptureReady = false
+    @Published var isAudioBuffered = false
     @Published var isCloudRecognizing = false
     @Published var isProcessing = false
     @Published var partialText = ""
@@ -478,6 +479,7 @@ class RecordingViewModel: ObservableObject {
         frontmostApp = targetApplication ?? NSWorkspace.shared.frontmostApplication
         isRecording = true
         isCaptureReady = false
+        isAudioBuffered = false
         isProcessing = false
         partialText = ""
         lastRecognizedText = ""
@@ -496,6 +498,16 @@ class RecordingViewModel: ObservableObject {
         SpeechService.shared.onCloudConnected = { [weak self] in
             DispatchQueue.main.async {
                 self?.isCloudRecognizing = true
+            }
+        }
+
+        SpeechService.shared.onCloudPreparing = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self, self.isRecording, self.partialText.isEmpty else { return }
+                self.isCaptureReady = false
+                self.statusText = self.isAudioBuffered
+                    ? "正在连接云端，语音已暂存…"
+                    : "正在连接云端，请稍候…"
             }
         }
 
@@ -519,6 +531,7 @@ class RecordingViewModel: ObservableObject {
                     guard let self = self, self.isRecording else { return }
                     self.partialText = text
                     self.lastRecognizedText = text
+                    if !text.isEmpty { self.isCaptureReady = true }
                     self.statusText = text.isEmpty
                         ? (self.isCaptureReady ? "可以开始说话，语音不会遗漏" : "正在准备麦克风，请稍候…")
                         : text
@@ -529,6 +542,7 @@ class RecordingViewModel: ObservableObject {
                     guard let strongSelf = self else { return }
                     strongSelf.isRecording = false
                     strongSelf.isCaptureReady = false
+                    strongSelf.isAudioBuffered = false
                     strongSelf.partialText = ""
 
                     let mode = SpokenMode.load()
@@ -546,6 +560,13 @@ class RecordingViewModel: ObservableObject {
                     strongSelf.processAndInput(text.isEmpty ? strongSelf.lastRecognizedText : text)
                 }
             },
+            onAudioBuffered: { [weak self] in
+                guard let self, self.isRecording, !self.isCancelled else { return }
+                self.isAudioBuffered = true
+                if self.partialText.isEmpty, !self.isCaptureReady {
+                    self.statusText = "正在连接云端，语音已暂存…"
+                }
+            },
             onCaptureReady: { [weak self] in
                 guard let self, self.isRecording, !self.isCancelled else { return }
                 self.isCaptureReady = true
@@ -558,6 +579,7 @@ class RecordingViewModel: ObservableObject {
                     guard let self, !self.isCancelled else { return }
                     self.isRecording = false
                     self.isCaptureReady = false
+                    self.isAudioBuffered = false
                     self.isCloudRecognizing = false
                     self.isProcessing = false
                     self.statusText = reason
@@ -570,6 +592,7 @@ class RecordingViewModel: ObservableObject {
         if !started {
             isRecording = false
             isCaptureReady = false
+            isAudioBuffered = false
             isCloudRecognizing = false
             statusText = "录音启动失败，请重试"
             stateManager.transition(to: .idle)
@@ -586,6 +609,7 @@ class RecordingViewModel: ObservableObject {
         statusText = "已取消"
         isRecording = false
         isCaptureReady = false
+        isAudioBuffered = false
         isCloudRecognizing = false
         isProcessing = false
         PipelineLatencyMetrics.shared.abandon()
@@ -597,6 +621,7 @@ class RecordingViewModel: ObservableObject {
         guard isRecording else { return }
         isRecording = false
         isCaptureReady = false
+        isAudioBuffered = false
         isCloudRecognizing = false
         statusText = ""
 
@@ -787,7 +812,7 @@ struct RecordingPanelView: View {
             Spacer().frame(height: 12)
 
             WaveformView(
-                isRecording: viewModel.isRecording && viewModel.isCaptureReady,
+                isRecording: viewModel.isRecording && (viewModel.isCaptureReady || viewModel.isAudioBuffered),
                 isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
                 isProcessing: viewModel.isProcessing
             )
