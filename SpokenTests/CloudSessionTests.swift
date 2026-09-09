@@ -189,7 +189,18 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 20, thinkingEnabled: true), 2_048)
         XCTAssertEqual(MiniMaxService.maxOutputTokens(forInputLength: 2_000, thinkingEnabled: true), 9_024)
         XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 500, thinkingEnabled: false), 20)
+        XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 2_000, thinkingEnabled: false), 35)
+        XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 20_000, thinkingEnabled: false), 60)
         XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 500, thinkingEnabled: true), 45)
         XCTAssertEqual(MiniMaxService.aiTimeout(forInputLength: 10_000, thinkingEnabled: true), 60)
+    }
+
+    func testQwenDashScopeThinkingHasIndependentPreference() {
+        let baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        XCTAssertEqual(MiniMaxService.thinkingRequestValue(requested: false, model: "qwen3.8-flash", baseURL: baseURL), false)
+        XCTAssertEqual(MiniMaxService.thinkingRequestValue(requested: true, model: "qwen3.8-flash", baseURL: baseURL), true)
+        XCTAssertEqual(MiniMaxService.thinkingPreferenceKey(model: "qwen3.8-flash", baseURL: baseURL), MiniMaxService.qwenThinkingEnabledKey)
+        XCTAssertEqual(MiniMaxService.thinkingPreferenceKey(model: "deepseek-v4-flash", baseURL: baseURL), MiniMaxService.thinkingEnabledKey)
+        XCTAssertFalse(MiniMaxService.supportsThinkingToggle(model: "qwen3.8-flash", baseURL: "https://dashscope.aliyuncs.com.example.org/v1"))
     }
 }

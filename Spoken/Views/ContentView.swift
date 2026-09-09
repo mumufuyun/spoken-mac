@@ -550,6 +550,7 @@ struct ModelConfigSectionView: View {
     @State private var baseURL: String = ""
     @State private var modelName: String = ""
     @State private var thinkingEnabled = false
+    @State private var qwenThinkingEnabled = false
     
     private let textPrimary = Color(hex: "#000000")
     private let textMuted = Color(hex: "#777169")
@@ -730,6 +731,7 @@ struct ModelConfigSectionView: View {
 
         apiKey = SecureKeyStorage.shared.readAPIKey() ?? ""
         thinkingEnabled = UserDefaults.standard.bool(forKey: MiniMaxService.thinkingEnabledKey)
+        qwenThinkingEnabled = UserDefaults.standard.bool(forKey: MiniMaxService.qwenThinkingEnabledKey)
     }
 
     private func saveConfig() {
@@ -758,6 +760,7 @@ struct ModelConfigSectionView: View {
             SecureKeyStorage.shared.deleteAPIKey()
         }
         UserDefaults.standard.set(thinkingEnabled, forKey: MiniMaxService.thinkingEnabledKey)
+        UserDefaults.standard.set(qwenThinkingEnabled, forKey: MiniMaxService.qwenThinkingEnabledKey)
 
         saved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -771,16 +774,27 @@ struct ModelConfigSectionView: View {
 
     private var thinkingToggleBinding: Binding<Bool> {
         Binding(
-            get: { supportsThinkingToggle && thinkingEnabled },
-            set: { thinkingEnabled = $0 }
+            get: { supportsThinkingToggle && selectedThinkingEnabled },
+            set: {
+                if usesQwenThinkingPreference { qwenThinkingEnabled = $0 }
+                else { thinkingEnabled = $0 }
+            }
         )
+    }
+
+    private var usesQwenThinkingPreference: Bool {
+        MiniMaxService.thinkingPreferenceKey(model: modelName, baseURL: baseURL) == MiniMaxService.qwenThinkingEnabledKey
+    }
+
+    private var selectedThinkingEnabled: Bool {
+        usesQwenThinkingPreference ? qwenThinkingEnabled : thinkingEnabled
     }
 
     private var thinkingDescription: String {
         if supportsThinkingToggle {
-            return thinkingEnabled
-                ? "已开启。复杂长文本会进行更充分的推理和结构整理，但处理时间可能明显增加。"
-                : "已关闭。响应更快，适合短文本；复杂长文本的整理可能更保守。"
+            return selectedThinkingEnabled
+                ? "已开启。模型会先思考再输出，等待时间可能明显增加。语音整理通常建议关闭。"
+                : "已关闭。直接整理文本，通常响应更快；长文本仍会按当前场景归并和分段。"
         }
         return "当前模型或服务地址暂不支持由Spoken控制思考模式。"
     }

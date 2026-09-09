@@ -41,6 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover!
     private var hotKeyService: HotKeyService!
     private var recordingPanel: NSPanel?
+    private var processingNoticePanel: NSPanel?
     private var settingsWindow: NSWindow?
     private var recordingViewModel = RecordingViewModel()
     private var frontmostAppBeforeHotKey: NSRunningApplication?
@@ -251,6 +252,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Recording Panel
 
     private func showRecordingPanel() {
+        processingNoticePanel?.orderOut(nil)
+        processingNoticePanel = nil
         frontmostAppBeforeHotKey = NSWorkspace.shared.frontmostApplication
         print("Spoken: [DEBUG] AppDelegate frontmost app saved: \(frontmostAppBeforeHotKey?.localizedName ?? "unknown")")
 
@@ -391,6 +394,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
         stateManager.transition(to: .idle)
+        if let notice = recordingViewModel.fallbackNotice {
+            showProcessingNotice(notice)
+        }
+    }
+
+    /// 提示单独显示，不抢焦点、不混入输入正文，也不阻挡下一次录音。
+    private func showProcessingNotice(_ message: String) {
+        processingNoticePanel?.orderOut(nil)
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 52),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        panel.level = .statusBar
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentViewController = NSHostingController(rootView:
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .frame(width: 420, height: 52)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        )
+        if let screen = NSScreen.main {
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - 210, y: screen.visibleFrame.minY + 40))
+        }
+        processingNoticePanel = panel
+        panel.orderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard self?.processingNoticePanel === panel else { return }
+            panel.orderOut(nil)
+            self?.processingNoticePanel = nil
+        }
     }
 
     // MARK: - Permissions
@@ -466,6 +502,7 @@ class RecordingViewModel: ObservableObject {
     @Published var statusText = "正在准备麦克风，请稍候…"
     @Published var displayStatus = "录音"
     @Published var isCancelled = false
+    private(set) var fallbackNotice: String?
     private var frontmostApp: NSRunningApplication?
     var targetApplication: NSRunningApplication?
     private var lastRecognizedText = ""
@@ -481,6 +518,7 @@ class RecordingViewModel: ObservableObject {
         isCaptureReady = false
         isAudioBuffered = false
         isProcessing = false
+        fallbackNotice = nil
         partialText = ""
         lastRecognizedText = ""
         statusText = "正在准备麦克风，请稍候…"
@@ -676,33 +714,28 @@ class RecordingViewModel: ObservableObject {
             }
 
             DispatchQueue.main.async {
-                guard !strongSelf.isCancelled else {
-                    print("Spoken: [DEBUG] Ignoring AI completion after cancellation")
-                    return
-                }
-                strongSelf.isProcessing = false
-                let finalText: String
-
-                switch result {
-                case .success(let output):
-                    if output.isEmpty {
-                        print("Spoken: [DEBUG] AI returned empty output, using original text")
-                        finalText = text
-                    } else {
-                        print("Spoken: [DEBUG] AI processing succeeded, output length: \(output.count)")
-                        finalText = output
-                    }
-
-                case .failure(let error):
-                    print("Spoken: [ERROR] AI processing failed: \(error.localizedDescription)")
-                    print("Spoken: [DEBUG] Falling back to original text (length: \(text.count))")
-                    finalText = text
-                }
-
-                print("Spoken: [DEBUG] Calling onComplete with text length: \(finalText.count)")
-                strongSelf.onComplete?(finalText, strongSelf.frontmostApp)
+                strongSelf.finishAIProcessing(result, originalText: text)
             }
         }
+    }
+
+    func finishAIProcessing(_ result: Result<String, Error>, originalText: String) {
+        guard !isCancelled else { return }
+        isProcessing = false
+        fallbackNotice = nil
+        let finalText: String
+        let validated = result.flatMap { output -> Result<String, Error> in
+            output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? .failure(MiniMaxError.emptyOutput) : .success(output)
+        }
+        switch validated {
+        case .success(let output):
+            finalText = output
+        case .failure(let error):
+            fallbackNotice = MiniMaxError.fallbackNotice(for: error)
+            finalText = originalText
+        }
+        onComplete?(finalText, frontmostApp)
     }
 }
 

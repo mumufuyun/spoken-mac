@@ -11,3 +11,6 @@ xcuserdata/
 ._*
 .catpaw/
 .trae/
+
+# Local prompt experiments can contain private transcripts and model outputs.
+evaluations/prompt-tuning-*/

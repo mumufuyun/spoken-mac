@@ -29,6 +29,14 @@
 2. 开始说话，再次触发快捷键结束录音。
 3. 按 `Esc` 可取消当前录音。
 
+### AI 指令与长语音
+
+Spoken 对百炼 `qwen3.8-flash` 默认关闭深度思考，可在模型设置中单独开启。长文本的处理等待上限会随长度增加。AI 超时、未返回正文或输出不完整时，会保留原文并显示提示。
+
+AI 指令模式会归并口述中的重复和分散事项，保留具体条件及不确定语气；已保存的自定义提示词仍优先使用。
+
+参数策略、回退行为和验证方法见 [AI 后处理说明](docs/ai-postprocessing.md)。
+
 ## 开发
 
 要求：macOS 14+、Xcode 15+。
@@ -53,6 +61,22 @@ xcodebuild test \
   -destination 'platform=macOS'
 ```
 
+仅安装 Command Line Tools 时，可运行 AI 处理的离线回归：
+
+```bash
+bash scripts/run_offline_ai_tests.sh
+```
+
+该入口编译实际应用源码，使用内存配置和模拟 HTTP 响应，不读取 API Key、不修改应用设置，也不调用外部模型。
+
+使用 Command Line Tools 构建本机试用版：
+
+```bash
+bash scripts/build_local_app.sh
+```
+
+产物位于 `build/Spoken.app`，仅做本地签名，不自动安装或启动。正式构建仍使用 Xcode。
+
 首次运行需要授予：
 
 - 麦克风权限
@@ -70,8 +94,20 @@ Spoken/
 ├── Assets.xcassets/     # 应用资源
 ├── Info.plist
 └── Spoken.entitlements
+
+SpokenTests/
+├── WritingSceneTests.swift          # 场景与提示词单元测试
+├── CloudSessionTests.swift          # 云端识别与模型配置测试
+└── Offline/AIProcessingRegression.swift # 不依赖XCTest的AI处理回归
+
+scripts/
+├── run_offline_ai_tests.sh          # 离线回归入口
+├── build_local_app.sh               # 本地应用构建
+└── run_prompt_evaluation.sh         # 手动真实模型评测，会产生调用费用
+
+docs/                               # 实现与验证说明
 ```
 
 云端稳定性面板只在本机保存会话、成功、失败、重连和降级次数，不保存音频或转录正文。
 
-当前版本：2.0.10。
+当前项目版本：2.0.16；本地构建脚本生成的构建号为216.1。

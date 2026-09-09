@@ -5,6 +5,8 @@ import Foundation
 final class MiniMaxService: @unchecked Sendable {
     static let shared = MiniMaxService()
     static let thinkingEnabledKey = "llm_enable_thinking"
+    static let qwenThinkingEnabledKey = "llm_qwen3_8_flash_enable_thinking"
+    private static let logger = UnifiedLogger(subsystem: "com.moss.spoken", category: "AIProcessing")
 
     // MARK: - 预设配置
 
@@ -26,7 +28,7 @@ final class MiniMaxService: @unchecked Sendable {
 
     /// 当前生效的 LLM 配置（Base URL + 模型名）
     private var currentConfig: (baseURL: String, model: String) {
-        let savedProvider = UserDefaults.standard.string(forKey: "llm_provider")
+        let savedProvider = defaults.string(forKey: "llm_provider")
         let preset = Self.presets.first { $0.name == savedProvider }
 
         let baseURL: String
@@ -35,7 +37,7 @@ final class MiniMaxService: @unchecked Sendable {
         if let preset = preset, preset.name != "custom" {
             // 读取该预设的独立配置
             let configKey = "llm_config_\(preset.name)"
-            if let savedConfig = UserDefaults.standard.dictionary(forKey: configKey) as? [String: String] {
+            if let savedConfig = defaults.dictionary(forKey: configKey) as? [String: String] {
                 baseURL = savedConfig["baseURL"] ?? preset.baseURL
                 model = savedConfig["model"] ?? preset.model
             } else {
@@ -44,8 +46,8 @@ final class MiniMaxService: @unchecked Sendable {
             }
         } else {
             // 自定义或首次使用：从 UserDefaults 读取，无值则回退到 MiniMax 快速
-            baseURL = UserDefaults.standard.string(forKey: "llm_custom_base_url") ?? Self.presets[0].baseURL
-            model = UserDefaults.standard.string(forKey: "llm_custom_model") ?? Self.presets[0].model
+            baseURL = defaults.string(forKey: "llm_custom_base_url") ?? Self.presets[0].baseURL
+            model = defaults.string(forKey: "llm_custom_model") ?? Self.presets[0].model
         }
 
         return (baseURL, model)
@@ -53,7 +55,7 @@ final class MiniMaxService: @unchecked Sendable {
 
     // API Key 从 Keychain 读取（兼容旧 account）
     private var apiKey: String {
-        if let key = SecureKeyStorage.shared.readAPIKey(), !key.isEmpty {
+        if let key = apiKeyProvider(), !key.isEmpty {
             return key
         }
         print("Spoken: [ERROR] API Key: EMPTY")
@@ -65,6 +67,12 @@ final class MiniMaxService: @unchecked Sendable {
     private var activeRequestID: UUID?
     private var activeCompletion: ((Result<String, Error>) -> Void)?
     private var timeoutWorkItem: DispatchWorkItem?
+    private var requestStartedAt: TimeInterval?
+    private let defaults: UserDefaults
+    private let session: URLSession
+    private let apiKeyProvider: () -> String?
+    private let timeoutOverride: TimeInterval?
+    private let log: (String) -> Void
 
     // Common instruction for fixing speech-to-text English word errors in Chinese context
     private static let mixedLangCorrection = """
@@ -94,7 +102,20 @@ final class MiniMaxService: @unchecked Sendable {
             .precomposedStringWithCompatibilityMapping
     }
 
-    private init() {}
+    // 可注入本地模拟响应；正常运行使用系统会话及 Keychain。
+    init(
+        defaults: UserDefaults = .standard,
+        session: URLSession = .shared,
+        apiKeyProvider: @escaping () -> String? = { SecureKeyStorage.shared.readAPIKey() },
+        timeoutOverride: TimeInterval? = nil,
+        log: @escaping (String) -> Void = { MiniMaxService.logger.info($0) }
+    ) {
+        self.defaults = defaults
+        self.session = session
+        self.apiKeyProvider = apiKeyProvider
+        self.timeoutOverride = timeoutOverride
+        self.log = log
+    }
 
     /// 远程模型只允许 HTTPS；本机兼容服务可使用 HTTP，避免 API Key 被明文发往远端。
     static func chatEndpoint(for baseURL: String) -> URL? {
@@ -123,9 +144,9 @@ final class MiniMaxService: @unchecked Sendable {
             return
         }
         let config = currentConfig
-        let thinkingEnabled = UserDefaults.standard.bool(forKey: Self.thinkingEnabledKey)
-            && Self.supportsThinkingToggle(model: config.model, baseURL: config.baseURL)
-        let aiTimeout = Self.aiTimeout(forInputLength: text.count, thinkingEnabled: thinkingEnabled)
+        let thinkingEnabled = Self.thinkingEnabled(in: defaults, model: config.model, baseURL: config.baseURL)
+        let aiTimeout = timeoutOverride ?? Self.aiTimeout(forInputLength: text.count, thinkingEnabled: thinkingEnabled)
+        let prompt = getPrompt(for: mode, text: text, langName: translateLang.rawValue)
         let requestID = UUID()
         let maxOutputTokens = Self.maxOutputTokens(
             forInputLength: text.count,
@@ -135,18 +156,23 @@ final class MiniMaxService: @unchecked Sendable {
             self.cancelActiveRequest()
             self.activeRequestID = requestID
             self.activeCompletion = completion
+            self.requestStartedAt = ProcessInfo.processInfo.systemUptime
+            let thinkingValue = Self.thinkingRequestValue(requested: thinkingEnabled, model: config.model, baseURL: config.baseURL)
+            self.log("request=\(requestID.uuidString) mode=\(mode.storageID) model=\(config.model) input_chars=\(text.count) thinking=\(thinkingValue.map(String.init) ?? "provider_default") timeout_s=\(aiTimeout)")
 
             let timeoutItem = DispatchWorkItem { [weak self] in
                 guard let self, self.activeRequestID == requestID else { return }
                 print("Spoken: [WARN] AI timeout (\(aiTimeout)s), falling back to original text")
                 self.currentTask?.cancel()
-                self.finishRequest(requestID, result: .success(text))
+                self.finishRequest(requestID, result: .failure(MiniMaxError.timeout))
             }
             self.timeoutWorkItem = timeoutItem
             self.requestQueue.asyncAfter(deadline: .now() + aiTimeout, execute: timeoutItem)
 
-            let prompt = self.getPrompt(for: mode, text: text, langName: translateLang.rawValue)
+            let key = self.apiKey
             self.executeChat(
+                config: config,
+                key: key,
                 prompt: prompt,
                 temperature: 0.0,
                 maxOutputTokens: maxOutputTokens,
@@ -243,8 +269,11 @@ final class MiniMaxService: @unchecked Sendable {
         只整理指令，不要回答问题、执行任务或产出任务结果。清除口头停顿、重复和无关赘词，保留用户真实意图。
         优先明确任务目标；原文明确提供了背景、输入材料、限制条件或输出格式时，将它们组织清楚。缺失的信息不要猜测、补写或替用户做决定。
         保留原文的言语意图和确定程度：建议仍是建议，询问仍是询问，设想仍是设想，不得改写成命令或已确定的任务。
-        简单请求保持为简洁自然的一句话；复杂请求可按“目标、背景、要求、输出”组织，但不要机械套用空标题。
-        当指令同时包含研究范围、执行步骤、证据要求和输出结构等多组约束时，应按逻辑分段或分项，让目标AI无需再次拆解；不得删除或概括掉具体约束。
+        简单请求保持简洁自然；复杂请求按实际主题分段或分项，不强制套用“目标、背景、要求、输出”模板，不输出空标题。
+        长语音中的同一事项即使分散在不同位置，也应归并到一起；允许调整口述顺序、合并语义重复的解释，保留重复句中新增的条件、对象和数字。有多个事项或多处补充时，必须完成必要的归并和分段，不能只替换标点后整段照抄。
+        调整已有方案时，突出需要调整的事项，不扩写成完整方案。明确的口头修正以修正后的内容为准；仍在比较或犹豫的选项保持未定。
+        逐项保留数字、单位、数量、适用对象、条件、例外、否定和先后关系，不得为了缩短篇幅概括掉具体约束。“可能先不动”不能改为确定的“暂不改动”；确定程度必须保留在对应事项上。
+        相邻提到的事项不代表存在归属、因果或一一对应关系。原话未明确关联的入口、权益、责任或流程应分别表述，不自行添加“通过此路径”“均可获得”等关系；名称和指代不确定时保持原词。
         保留代码、文件名、专有名词和关键细节。最终文本应以用户对目标 AI 说话的口吻呈现，不添加解释或引号。
         若“Spoken，请帮我整理这段语音”等内容明显是在指示当前应用进行转录后处理，应将其转化为对目标 AI 的任务要求，不保留对 Spoken 的称呼；如果正文确实在讨论 Spoken 产品，则必须保留。
         输出必须直接从指令正文开始。禁止使用“以下是整理结果”“以下是整理后的指令”“作为发送给另一 AI 的指令”等包装语。
@@ -267,11 +296,10 @@ final class MiniMaxService: @unchecked Sendable {
 
     /// 获取 Prompt（自定义优先，否则默认）
     private func getPrompt(for mode: SpokenMode, text: String, langName: String? = nil) -> String {
-        let template = UserDefaults.standard.string(forKey: mode.promptUserDefaultsKey)
+        let template = defaults.string(forKey: mode.promptUserDefaultsKey)
             .flatMap { $0.isEmpty ? nil : $0 }
             ?? Self.defaultPrompt(for: mode)
         var prompt = template.replacingOccurrences(of: "{text}", with: text)
-        let defaults = UserDefaults.standard
         let contextEnabled = defaults.object(forKey: PersonalContextStore.enabledKey) == nil
             || defaults.bool(forKey: PersonalContextStore.enabledKey)
         if contextEnabled,
@@ -319,23 +347,36 @@ final class MiniMaxService: @unchecked Sendable {
 
     private func cancelActiveRequest() {
         dispatchPrecondition(condition: .onQueue(requestQueue))
+        if let id = activeRequestID, let startedAt = requestStartedAt {
+            let elapsed = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+            log("request=\(id.uuidString) outcome=cancelled elapsed_ms=\(elapsed)")
+        }
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
         currentTask?.cancel()
         currentTask = nil
         activeRequestID = nil
         activeCompletion = nil
+        requestStartedAt = nil
     }
 
     private func finishRequest(_ requestID: UUID, result: Result<String, Error>) {
         dispatchPrecondition(condition: .onQueue(requestQueue))
         guard activeRequestID == requestID else { return }
         let completion = activeCompletion
+        let elapsed = ProcessInfo.processInfo.systemUptime - (requestStartedAt ?? ProcessInfo.processInfo.systemUptime)
+        let outcome: String
+        switch result {
+        case .success: outcome = "success"
+        case .failure(let error): outcome = (error as? MiniMaxError)?.outcomeCode ?? "network_or_response_error"
+        }
+        log("request=\(requestID.uuidString) outcome=\(outcome) elapsed_ms=\(Int(elapsed * 1_000))")
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
         currentTask = nil
         activeRequestID = nil
         activeCompletion = nil
+        requestStartedAt = nil
         PipelineLatencyMetrics.shared.mark(.aiCompleted)
         DispatchQueue.main.async { completion?(result) }
     }
@@ -348,15 +389,31 @@ final class MiniMaxService: @unchecked Sendable {
     }
 
     static func aiTimeout(forInputLength length: Int, thinkingEnabled: Bool) -> TimeInterval {
-        guard thinkingEnabled else { return 20 }
+        // 短消息保持原有截止；长文本给完整正文更多生成时间，重试仍共享这一个截止。
+        guard thinkingEnabled else { return min(60, 20 + Double(max(0, length - 500)) / 100) }
         return min(60, 45 + Double(max(0, length - 1_000)) / 500)
     }
 
     static func supportsThinkingToggle(model: String, baseURL: String) -> Bool {
-        let normalizedModel = model.lowercased()
-        let normalizedURL = baseURL.lowercased()
-        return normalizedModel.hasPrefix("deepseek-v4-")
-            && (normalizedURL.contains("dashscope.aliyuncs.com") || normalizedURL.contains(".maas.aliyuncs.com"))
+        guard let url = chatEndpoint(for: baseURL), let host = url.host?.lowercased(),
+              host == "dashscope.aliyuncs.com" || host.hasSuffix(".maas.aliyuncs.com") else { return false }
+        let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedModel.hasPrefix("deepseek-v4-") || isQwenFlash(model: normalizedModel)
+    }
+
+    private static func isQwenFlash(model: String) -> Bool {
+        model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "qwen3.8-flash"
+    }
+
+    static func thinkingPreferenceKey(model: String, baseURL: String) -> String {
+        // Qwen 原先不受全局开关控制，不继承可能来自其他模型的旧开启值。
+        isQwenFlash(model: model) && supportsThinkingToggle(model: model, baseURL: baseURL)
+            ? qwenThinkingEnabledKey : thinkingEnabledKey
+    }
+
+    static func thinkingEnabled(in defaults: UserDefaults, model: String, baseURL: String) -> Bool {
+        supportsThinkingToggle(model: model, baseURL: baseURL)
+            && defaults.bool(forKey: thinkingPreferenceKey(model: model, baseURL: baseURL))
     }
 
     static func thinkingRequestValue(requested: Bool, model: String, baseURL: String) -> Bool? {
@@ -366,6 +423,8 @@ final class MiniMaxService: @unchecked Sendable {
     // MARK: - 核心请求（OpenAI 兼容格式）
 
     private func executeChat(
+        config: (baseURL: String, model: String),
+        key: String,
         prompt: String,
         temperature: Double,
         maxOutputTokens: Int,
@@ -376,13 +435,11 @@ final class MiniMaxService: @unchecked Sendable {
     ) {
         dispatchPrecondition(condition: .onQueue(requestQueue))
         guard activeRequestID == requestID else { return }
-        let config = currentConfig
 
         guard let url = Self.chatEndpoint(for: config.baseURL) else {
             completion(.failure(MiniMaxError.invalidURL))
             return
         }
-        let key = apiKey
         guard !key.isEmpty else {
             completion(.failure(MiniMaxError.missingAPIKey))
             return
@@ -418,7 +475,7 @@ final class MiniMaxService: @unchecked Sendable {
         print("Spoken: [DEBUG] LLM request → \(config.baseURL) | model: \(config.model)")
         PipelineLatencyMetrics.shared.mark(.aiRequestStarted)
 
-        let task = URLSession.shared.dataTask(with: request) { rawData, response, error in
+        let task = session.dataTask(with: request) { rawData, response, error in
             // 记录 HTTP 状态码
             if let httpResponse = response as? HTTPURLResponse {
                 print("Spoken: [DEBUG] HTTP status: \(httpResponse.statusCode)")
@@ -436,7 +493,7 @@ final class MiniMaxService: @unchecked Sendable {
                     print("Spoken: [DEBUG] Retrying... (attempt \(retryCount + 1))")
                     self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                         guard self.activeRequestID == requestID else { return }
-                        self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                        self.executeChat(config: config, key: key, prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                     }
                     return
                 }
@@ -466,7 +523,7 @@ final class MiniMaxService: @unchecked Sendable {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                             guard self.activeRequestID == requestID else { return }
-                            self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                            self.executeChat(config: config, key: key, prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                         }
                         return
                     }
@@ -482,7 +539,7 @@ final class MiniMaxService: @unchecked Sendable {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                             guard self.activeRequestID == requestID else { return }
-                            self.executeChat(prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                            self.executeChat(config: config, key: key, prompt: prompt, temperature: temperature, maxOutputTokens: maxOutputTokens, thinkingEnabled: thinkingEnabled, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                         }
                         return
                     }
@@ -490,13 +547,29 @@ final class MiniMaxService: @unchecked Sendable {
                     return
                 }
 
+                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                    completion(.failure(MiniMaxError.apiError(code: http.statusCode, message: "请求失败")))
+                    return
+                }
+                if let first = (json["choices"] as? [[String: Any]])?.first,
+                   let reason = first["finish_reason"] as? String,
+                   !["stop", "end_turn"].contains(reason) {
+                    completion(.failure(MiniMaxError.incompleteOutput))
+                    return
+                }
+
                 // OpenAI 标准格式：choices[0].message.content
                 if let choices = json["choices"] as? [[String: Any]],
                    let first = choices.first,
-                   let message = first["message"] as? [String: Any],
-                   let text = message["content"] as? String {
+                   let message = first["message"] as? [String: Any] {
                     print("Spoken: [DEBUG] Parse success via OpenAI format (message.content)")
-                    completion(.success(Self.cleanResponse(text)))
+                    if let text = message["content"] as? String {
+                        completion(Self.validatedOutput(text))
+                    } else if message["content"] == nil || message["content"] is NSNull {
+                        completion(.failure(MiniMaxError.emptyOutput))
+                    } else {
+                        completion(.failure(MiniMaxError.parseError))
+                    }
                     return
                 }
 
@@ -506,14 +579,14 @@ final class MiniMaxService: @unchecked Sendable {
                    let messages = first["messages"] as? [[String: Any]],
                    let text = messages.first?["text"] as? String {
                     print("Spoken: [DEBUG] Parse success via MiniMax native format (messages[].text)")
-                    completion(.success(Self.cleanResponse(text)))
+                    completion(Self.validatedOutput(text))
                     return
                 }
 
                 // 备用：output 字段
                 if let output = json["output"] as? String {
                     print("Spoken: [DEBUG] Parse success via output path")
-                    completion(.success(Self.cleanResponse(output)))
+                    completion(Self.validatedOutput(output))
                     return
                 }
 
@@ -529,6 +602,11 @@ final class MiniMaxService: @unchecked Sendable {
         task.resume()
         currentTask = task
     }
+
+    static func validatedOutput(_ text: String) -> Result<String, Error> {
+        let cleaned = cleanResponse(text)
+        return cleaned.isEmpty ? .failure(MiniMaxError.emptyOutput) : .success(cleaned)
+    }
 }
 
 // MARK: - 错误定义
@@ -541,6 +619,31 @@ enum MiniMaxError: LocalizedError {
     case apiError(code: Int, message: String)
     case timeout
     case cancelled
+    case emptyOutput
+    case incompleteOutput
+
+    var outcomeCode: String {
+        switch self {
+        case .timeout: return "timeout"
+        case .emptyOutput: return "empty_output"
+        case .incompleteOutput: return "incomplete_output"
+        case .cancelled: return "cancelled"
+        case .invalidURL: return "invalid_url"
+        case .missingAPIKey: return "missing_api_key"
+        case .noData: return "no_data"
+        case .parseError: return "parse_error"
+        case .apiError: return "api_error"
+        }
+    }
+
+    static func fallbackNotice(for error: Error) -> String {
+        switch error as? MiniMaxError {
+        case .timeout: return "AI 处理超时，已保留原文"
+        case .emptyOutput: return "AI 未返回正文，已保留原文"
+        case .incompleteOutput: return "AI 输出不完整，已保留原文"
+        default: return "AI 处理失败，已保留原文"
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -549,8 +652,10 @@ enum MiniMaxError: LocalizedError {
         case .noData: return "服务器未返回数据"
         case .parseError: return "响应解析失败"
         case .apiError(let code, let message): return "API 错误 (\(code)): \(message)"
-        case .timeout: return "AI 处理超时，已使用原文"
+        case .timeout: return "AI 处理超时"
         case .cancelled: return "操作已取消"
+        case .emptyOutput: return "AI 未返回正文"
+        case .incompleteOutput: return "AI 输出不完整"
         }
     }
 }
