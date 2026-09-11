@@ -62,6 +62,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let navigation = settingsWindow?.delegate as? SettingsNavigationGuard, !navigation.allowNavigation() {
+            return .terminateCancel
+        }
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         networkMonitor.cancel()
         CloudSpeechService.shared.disconnect()
@@ -88,11 +95,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Popover
 
     private func setupPopover() {
-        let contentView = ContentView { [weak self] in
-            self?.showSettingsWindow()
+        let contentView = ContentView { [weak self] section in
+            self?.showSettingsWindow(section: section)
         }
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 300, height: 205)
+        popover.contentSize = NSSize(width: 380, height: ContentView.panelHeight)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: contentView)
 
@@ -109,7 +116,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Settings Window
 
-    private func showSettingsWindow() {
+    private func showSettingsWindow(section: SettingsSection = .modes) {
         if popover.isShown {
             popover.performClose(nil)
         }
@@ -118,16 +125,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let existingWindow = settingsWindow {
             window = existingWindow
         } else {
-            let hostingController = NSHostingController(rootView: SettingsView())
+            let hostingController = NSHostingController(rootView: SettingsView(initialSection: section))
             let newWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 860, height: 650),
+                contentRect: NSRect(x: 0, y: 0, width: 1000, height: 740),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             newWindow.title = "Spoken 设置"
             newWindow.contentViewController = hostingController
-            newWindow.minSize = NSSize(width: 720, height: 540)
+            newWindow.minSize = NSSize(width: 820, height: 580)
             newWindow.isReleasedWhenClosed = false
             newWindow.collectionBehavior.insert(.moveToActiveSpace)
             if !newWindow.setFrameUsingName("SpokenSettingsWindow") {
@@ -143,6 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        NotificationCenter.default.post(name: Notification.Name("SpokenOpenSettingsSection"), object: section)
     }
 
     // MARK: - Global HotKey
@@ -265,7 +273,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(rootView: recordingView)
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 170),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: RecordingViewModel.collapsedHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -276,6 +284,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentViewController = hostingController
+        panel.hidesOnDeactivate = false
+        viewModel.onPanelResize = { [weak panel] height in
+            guard let panel else { return }
+            var frame = panel.frame
+            frame.size.height = height
+            panel.setFrame(frame, display: true)
+        }
 
         if let screen = NSScreen.main {
             let visible = screen.visibleFrame
@@ -285,12 +300,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ))
         }
 
-        viewModel.onCancel = { [weak self] in
+        viewModel.onCancel = { [weak self, weak panel] in
             guard let strongSelf = self else { return }
             strongSelf.hotKeyService.stopEscapeMonitoring()
             strongSelf.stateManager.transition(to: .idle)
             PipelineLatencyMetrics.shared.abandon()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                guard let panel, strongSelf.recordingPanel === panel else { return }
                 strongSelf.recordingPanel?.orderOut(nil)
                 strongSelf.recordingPanel = nil
             }
@@ -314,7 +330,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFront(nil)
         PipelineLatencyMetrics.shared.mark(.panelShown)
 
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self, weak panel] in
+            guard let self, let panel, self.recordingPanel === panel, !viewModel.isCancelled else { return }
             viewModel.startRecording()
         }
     }
@@ -507,6 +524,47 @@ class RecordingViewModel: ObservableObject {
     var targetApplication: NSRunningApplication?
     private var lastRecognizedText = ""
     private let stateManager = StateManager.shared
+    static let collapsedHeight: CGFloat = 224
+    @Published var showsModes = false {
+        didSet { onPanelResize?(panelHeight) }
+    }
+    var panelHeight: CGFloat { showsModes ? min(520, (NSScreen.main?.visibleFrame.height ?? 800) - 80) : Self.collapsedHeight }
+    var onPanelResize: ((CGFloat) -> Void)?
+    private(set) var frozenConfiguration: Result<AIProcessingSnapshot, Error>?
+    private let snapshotProvider: () throws -> AIProcessingSnapshot
+    private let modeNameProvider: () -> String
+    private let processor: AIProcessingService
+    private let stopCapture: () -> Void
+    private let cancelCapture: () -> Void
+    private var hasSubmitted = false
+
+    init(snapshotProvider: @escaping () throws -> AIProcessingSnapshot = {
+        try AIProcessingSnapshot.capture(modes: .shared, connections: .shared)
+    }, modeNameProvider: @escaping () -> String = { ModeStore.shared.selected.name },
+         processor: AIProcessingService = .shared,
+         stopCapture: @escaping () -> Void = { SpeechService.shared.stopRecording() },
+         cancelCapture: @escaping () -> Void = { SpeechService.shared.cancelRecording() }) {
+        self.snapshotProvider = snapshotProvider
+        self.modeNameProvider = modeNameProvider
+        self.processor = processor
+        self.stopCapture = stopCapture
+        self.cancelCapture = cancelCapture
+    }
+
+    /// Called for both the stop button/hotkey and an automatic ASR finalization.
+    func freezeConfiguration() {
+        guard frozenConfiguration == nil else { return }
+        frozenConfiguration = Result { try snapshotProvider() }
+        showsModes = false
+        switch frozenConfiguration! {
+        case .success(let snapshot):
+            displayStatus = snapshot.mode.name
+            isProcessing = snapshot.requiresAI
+        case .failure:
+            displayStatus = modeNameProvider()
+            isProcessing = true
+        }
+    }
 
     var onClose: (() -> Void)?
     var onComplete: ((String, NSRunningApplication?) -> Void)?
@@ -515,6 +573,10 @@ class RecordingViewModel: ObservableObject {
     func startRecording() {
         frontmostApp = targetApplication ?? NSWorkspace.shared.frontmostApplication
         isRecording = true
+        isCancelled = false
+        frozenConfiguration = nil
+        hasSubmitted = false
+        showsModes = false
         isCaptureReady = false
         isAudioBuffered = false
         isProcessing = false
@@ -522,7 +584,7 @@ class RecordingViewModel: ObservableObject {
         partialText = ""
         lastRecognizedText = ""
         statusText = "正在准备麦克风，请稍候…"
-        displayStatus = SpokenMode.load().rawValue
+        displayStatus = modeNameProvider()
         PipelineLatencyMetrics.shared.mark(.recordingStarted)
 
         stateManager.transition(to: .recording)
@@ -577,23 +639,14 @@ class RecordingViewModel: ObservableObject {
             },
             onFinal: { [weak self] text in
                 DispatchQueue.main.async {
-                    guard let strongSelf = self else { return }
+                    guard let strongSelf = self, !strongSelf.isCancelled, !strongSelf.hasSubmitted else { return }
+                    strongSelf.freezeConfiguration()
                     strongSelf.isRecording = false
                     strongSelf.isCaptureReady = false
                     strongSelf.isAudioBuffered = false
                     strongSelf.partialText = ""
 
-                    let mode = SpokenMode.load()
-
-                    if !mode.requiresAI {
-                        strongSelf.isProcessing = false
-                        strongSelf.statusText = ""
-                    } else {
-                        strongSelf.isProcessing = true
-                        strongSelf.displayStatus = mode.rawValue
-                        strongSelf.statusText = ""
-                    }
-
+                    strongSelf.statusText = ""
                     strongSelf.stateManager.transition(to: .finishing)
                     strongSelf.processAndInput(text.isEmpty ? strongSelf.lastRecognizedText : text)
                 }
@@ -611,6 +664,10 @@ class RecordingViewModel: ObservableObject {
                 if self.partialText.isEmpty {
                     self.statusText = "可以开始说话，语音不会遗漏"
                 }
+            },
+            onCaptureStopped: { [weak self] in
+                // SpeechService stops capture on the main thread, before awaiting final ASR.
+                self?.captureStopped()
             },
             onStartFailure: { [weak self] reason in
                 DispatchQueue.main.async {
@@ -634,6 +691,7 @@ class RecordingViewModel: ObservableObject {
             isCloudRecognizing = false
             statusText = "录音启动失败，请重试"
             stateManager.transition(to: .idle)
+            onCancel?()
         }
     }
 
@@ -641,8 +699,8 @@ class RecordingViewModel: ObservableObject {
         if isCancelled { return }
         isCancelled = true
 
-        SpeechService.shared.cancelRecording()
-        MiniMaxService.shared.cancelCurrentTask()
+        cancelCapture()
+        processor.cancelCurrentTask()
 
         statusText = "已取消"
         isRecording = false
@@ -657,64 +715,44 @@ class RecordingViewModel: ObservableObject {
 
     func stopRecording() {
         guard isRecording else { return }
+        captureStopped()
+        stopCapture()
+    }
+
+    func captureStopped() {
+        guard !isCancelled, !hasSubmitted else { return }
+        freezeConfiguration()
         isRecording = false
         isCaptureReady = false
         isAudioBuffered = false
         isCloudRecognizing = false
         statusText = ""
 
-        let mode = SpokenMode.load()
-
-        if !mode.requiresAI {
-            isProcessing = false
-        } else {
-            isProcessing = true
-            displayStatus = mode.rawValue
-        }
-
         stateManager.transition(to: .finishing)
-        SpeechService.shared.stopRecording()
     }
 
-    private func processAndInput(_ text: String) {
-        print("Spoken: [DEBUG] processAndInput called with text length: \(text.count)")
-
+    func processAndInput(_ text: String) {
+        guard !isCancelled, !hasSubmitted else { return }
+        hasSubmitted = true
         guard !text.isEmpty else {
-            print("Spoken: [WARN] processAndInput: empty text received")
             isProcessing = false
             stateManager.transition(to: .idle)
             PipelineLatencyMetrics.shared.abandon()
+            onCancel?()
             return
         }
-
-        let mode = SpokenMode.load()
-        let translateLangRaw = UserDefaults.standard.string(forKey: "translateLang") ?? TranslateLanguage.original.rawValue
-        let translateLang = TranslateLanguage(rawValue: translateLangRaw) ?? .original
-
-        print("Spoken: [DEBUG] Process mode: \(mode.rawValue), translateLang: \(translateLang.rawValue)")
-
-        if !mode.requiresAI && translateLang == .original {
-            print("Spoken: [DEBUG] Direct mode, skipping AI processing")
-            isProcessing = false
-            onComplete?(text, frontmostApp)
-            return
-        }
-
-        print("Spoken: [DEBUG] Starting AI processing: \(mode.rawValue)")
-        isProcessing = true
-
-        MiniMaxService.shared.process(
-            text: text,
-            mode: mode,
-            translateLang: translateLang
-        ) { [weak self] result in
-            guard let strongSelf = self else {
-                print("Spoken: [ERROR] processAndInput: self is nil in completion")
+        freezeConfiguration()
+        switch frozenConfiguration! {
+        case .failure(let error): finishAIProcessing(.failure(error), originalText: text)
+        case .success(let snapshot):
+            if !snapshot.requiresAI {
+                isProcessing = false
+                onComplete?(text, frontmostApp)
                 return
             }
-
-            DispatchQueue.main.async {
-                strongSelf.finishAIProcessing(result, originalText: text)
+            isProcessing = true
+            processor.process(text: text, snapshot: snapshot) { [weak self] result in
+                DispatchQueue.main.async { self?.finishAIProcessing(result, originalText: text) }
             }
         }
     }
@@ -724,9 +762,10 @@ class RecordingViewModel: ObservableObject {
         isProcessing = false
         fallbackNotice = nil
         let finalText: String
+        let snapshot = try? frozenConfiguration?.get()
         let validated = result.flatMap { output -> Result<String, Error> in
-            output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? .failure(MiniMaxError.emptyOutput) : .success(output)
+            AIProcessingService.validatedOutput(output, stripWrappers: snapshot?.mode.isCustom != true,
+                isInstruction: snapshot?.mode.builtin == .aiInstruction, originalText: originalText)
         }
         switch validated {
         case .success(let output):
@@ -743,181 +782,61 @@ class RecordingViewModel: ObservableObject {
 
 struct RecordingPanelView: View {
     @ObservedObject var viewModel: RecordingViewModel
-    @State private var pulseScale: CGFloat = 1.0
+    @ObservedObject var modes: ModeStore
+    @State private var modeError: String?
 
-    private let bgPrimary = Color(hex: "#ffffff")
-    private let textPrimary = Color(hex: "#000000")
-    private let textSecondary = Color(hex: "#4e4e4e")
-    private let textMuted = Color(hex: "#777169")
-    private let warmShadow = Color(hex: "#4e3220")
+    init(viewModel: RecordingViewModel, modes: ModeStore = .shared) {
+        _viewModel = ObservedObject(wrappedValue: viewModel)
+        _modes = ObservedObject(wrappedValue: modes)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Spoken")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(0.14)
-                    .foregroundColor(textSecondary)
-
-                Text("·")
-                    .font(.system(size: 12, weight: .light))
-                    .foregroundColor(textMuted)
-
-                Text("语言是最好的输入")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundColor(textMuted)
-                    .tracking(0.14)
-
+                Text("Spoken").font(.system(size: 14, weight: .semibold, design: .rounded))
                 Spacer()
-
-                if viewModel.isRecording && !viewModel.isCaptureReady {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: "#f39c12"))
-                            .frame(width: 6, height: 6)
-                        Text("准备中")
-                            .font(.system(size: 11, weight: .medium))
-                            .tracking(0.14)
-                            .foregroundColor(Color(hex: "#f39c12"))
-                    }
-                } else if viewModel.isRecording {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: "#27ae60"))
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(pulseScale)
-                            .animation(
-                                .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
-                                value: pulseScale
-                            )
-                        Text("可说话")
-                            .font(.system(size: 11, weight: .medium))
-                            .tracking(0.14)
-                            .foregroundColor(Color(hex: "#27ae60"))
-                    }
-                    .onAppear {
-                        pulseScale = 1.0
-                        withAnimation { pulseScale = 1.3 }
-                    }
-                } else if viewModel.isCloudRecognizing {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: "#4a90d9"))
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(pulseScale)
-                            .animation(
-                                .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
-                                value: pulseScale
-                            )
-                        Text("云端识别中...")
-                            .font(.system(size: 11, weight: .medium))
-                            .tracking(0.14)
-                            .foregroundColor(Color(hex: "#4a90d9"))
-                    }
-                    .onAppear {
-                        pulseScale = 1.0
-                        withAnimation { pulseScale = 1.3 }
-                    }
-                } else if viewModel.isProcessing {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(hex: "#f39c12"))
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(pulseScale)
-                            .animation(
-                                .easeInOut(duration: 1.2).repeatForever(autoreverses: true),
-                                value: pulseScale
-                            )
-                        Text(viewModel.displayStatus)
-                            .font(.system(size: 11, weight: .medium))
-                            .tracking(0.14)
-                            .foregroundColor(Color(hex: "#f39c12"))
-                    }
-                    .onAppear {
-                        pulseScale = 1.0
-                        withAnimation { pulseScale = 1.2 }
-                    }
-                }
+                Circle().fill(viewModel.isRecording ? (viewModel.isCaptureReady ? Color.green : Color.orange) : SpokenTheme.accent)
+                    .frame(width: 6, height: 6)
+                Text(viewModel.isRecording ? (viewModel.isCaptureReady ? "可说话" : "准备中") : "处理中")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-
-            Spacer().frame(height: 12)
-
-            WaveformView(
-                isRecording: viewModel.isRecording && (viewModel.isCaptureReady || viewModel.isAudioBuffered),
-                isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
-                isProcessing: viewModel.isProcessing
-            )
-            .frame(height: 48)
-
-            Spacer().frame(height: 14)
-
-            Text(viewModel.statusText)
-                .font(.system(size: 15, weight: .regular))
-                .tracking(0.16)
-                .foregroundColor(viewModel.partialText.isEmpty ? textMuted : textPrimary)
-                .lineLimit(1)
-                .truncationMode(.head)
-                .multilineTextAlignment(.trailing)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.horizontal, 24)
-                .animation(.easeInOut(duration: 0.2), value: viewModel.statusText)
-
-            Spacer().frame(height: 14)
-
-            HStack {
-                if viewModel.isCancelled {
-                    Text("已取消")
-                        .font(.system(size: 11, weight: .regular))
-                        .tracking(0.14)
-                        .foregroundColor(textMuted)
-                } else if viewModel.isRecording {
-                    HStack(spacing: 10) {
-                        Text("再次按 ⌥+空格 结束")
-                            .font(.system(size: 11, weight: .regular))
-                            .tracking(0.14)
-                            .foregroundColor(textMuted)
-                        Spacer()
-                        Button("取消") {
-                            viewModel.cancel()
-                        }
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color(hex: "#c0392b"))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(Color(hex: "#f5f2ef"))
-                        .cornerRadius(6)
-                        .buttonStyle(.plain)
-                    }
-                } else if viewModel.isCloudRecognizing || viewModel.isProcessing {
-                    HStack(spacing: 10) {
-                        Spacer()
-                        Button("取消") {
-                            viewModel.cancel()
-                        }
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color(hex: "#c0392b"))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(Color(hex: "#f5f2ef"))
-                        .cornerRadius(6)
-                        .buttonStyle(.plain)
-                    }
-                } else {
+            Button {
+                viewModel.showsModes.toggle()
+            } label: {
+                HStack {
+                    Image(systemName: "square.grid.2x2")
+                    Text(viewModel.isRecording ? modes.selected.name : viewModel.displayStatus).lineLimit(1)
                     Spacer()
-                }
+                    Image(systemName: viewModel.isRecording ? (viewModel.showsModes ? "chevron.up" : "chevron.down") : "lock.fill")
+                }.font(.callout).padding(10)
+                    .background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 9))
+            }.buttonStyle(.plain).disabled(!viewModel.isRecording)
+                .accessibilityLabel("当前模式：\(viewModel.isRecording ? modes.selected.name : viewModel.displayStatus)")
+                .help(viewModel.isRecording ? "录音中可以切换，停止时锁定" : "本次模式已锁定")
+            if viewModel.showsModes && viewModel.isRecording {
+                ScrollView {
+                    ModeGrid(modes: modes.modes, selectedID: modes.selected.id, onSelect: { id in
+                        do { try modes.select(id); viewModel.showsModes = false; modeError = nil }
+                        catch { modeError = error.localizedDescription }
+                    })
+                }.frame(maxHeight: .infinity)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 14)
-        }
-        .frame(width: 420, height: 170)
-        .background(
-            bgPrimary
-                .cornerRadius(16)
-                .shadow(color: warmShadow.opacity(0.04), radius: 4, x: 0, y: 2)
-                .shadow(color: warmShadow.opacity(0.02), radius: 1, x: 0, y: 0)
-        )
+            WaveformView(isRecording: viewModel.isRecording && (viewModel.isCaptureReady || viewModel.isAudioBuffered),
+                         isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
+                         isProcessing: viewModel.isProcessing).frame(height: 40)
+            Text(modeError ?? viewModel.statusText).font(.system(size: 13)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.head).frame(maxWidth: .infinity, alignment: .trailing)
+            Spacer(minLength: 0)
+            HStack {
+                Text(viewModel.isRecording ? "⌥ 空格完成 · Esc 取消" : "本次配置已锁定")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") { viewModel.cancel() }.controlSize(.small)
+                    .disabled(viewModel.isCancelled)
+            }
+        }.padding(18).frame(width: 420, height: viewModel.panelHeight)
+            .background(SpokenTheme.background, in: RoundedRectangle(cornerRadius: 16))
+            .tint(SpokenTheme.accent)
     }
 }
 
@@ -949,6 +868,7 @@ struct WaveformView: View {
                 startAnimation()
             }
         }
+        .onDisappear { stopAnimation() }
         .onChange(of: isRecording) { _, newValue in
             if newValue || isCloudRecognizing {
                 startAnimation()

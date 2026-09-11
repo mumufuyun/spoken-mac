@@ -62,6 +62,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private var lastRecognizedText = ""
     private var capturedOnPartial: ((String) -> Void)?
     private var capturedOnFinal: ((String) -> Void)?
+    private var capturedOnCaptureStopped: (() -> Void)?
     private var capturedOnStartFailure: ((String) -> Void)?
     private let sessionLock = NSLock()
     private var activeSessionID: UUID?
@@ -394,6 +395,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         onFinal: @escaping (String) -> Void,
         onAudioBuffered: @escaping () -> Void = {},
         onCaptureReady: @escaping () -> Void = {},
+        onCaptureStopped: @escaping () -> Void = {},
         onStartFailure: @escaping (String) -> Void = { _ in }
     ) -> Bool {
         guard state == .idle else {
@@ -416,6 +418,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         currentProvider = provider
         let sessionID = beginSession()
         capturedOnStartFailure = onStartFailure
+        capturedOnCaptureStopped = onCaptureStopped
         logInfo("startRecording, provider=\(provider.rawValue)")
 
         switch provider {
@@ -842,12 +845,21 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     /// 正常停止录音（静音触发或用户主动停止），会触发 onFinal 回调
     private func stopAndFinish(lastText: String) {
-        guard state == .recording else { return }
+        guard state == .recording || state == .starting else { return }
         guard !isStopping else { return }
         guard let sessionID = currentSessionID() else { return }
+        let stoppedDuringPreparation = state == .starting
         PipelineLatencyMetrics.shared.mark(.stopRequested)
         stopAcceptingAudio(for: sessionID)
         state = .stopping
+        capturedOnCaptureStopped?()
+
+        if stoppedDuringPreparation {
+            // No running audio engine yet: cancel startup/retries instead of waiting for ASR.
+            if isUsingCloud { CloudSpeechService.shared.disconnect() }
+            completeStoppedRecording(text: lastText)
+            return
+        }
 
         if isUsingCloud {
             // 先停止采集，确保不会在 commit 之后继续追加音频。
@@ -904,7 +916,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     /// 用户手动停止录音（停止并返回当前识别结果，触发 onFinal）
     func stopRecording() {
-        guard state == .recording else { return }
+        guard state == .recording || state == .starting else { return }
         let text = lastRecognizedText
         logInfo("stopRecording: finalTextLength=\(text.count)")
         stopAndFinish(lastText: text)
