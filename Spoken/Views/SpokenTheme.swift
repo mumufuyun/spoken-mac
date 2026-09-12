@@ -118,6 +118,7 @@ final class SettingsNavigationGuard: NSObject, ObservableObject, NSWindowDelegat
     private var isDirty: () -> Bool = { false }
     private var save: () throws -> Void = {}
     private var discard: () -> Void = {}
+    private var prepareNavigation: () -> Void = {}
     private let decision: () -> Decision
     private let reportFailure: (Error) -> Void
 
@@ -128,13 +129,16 @@ final class SettingsNavigationGuard: NSObject, ObservableObject, NSWindowDelegat
         super.init()
     }
 
-    func install(isDirty: @escaping () -> Bool, save: @escaping () throws -> Void, discard: @escaping () -> Void) {
+    func install(isDirty: @escaping () -> Bool, save: @escaping () throws -> Void, discard: @escaping () -> Void,
+                 prepareNavigation: @escaping () -> Void = {}) {
         self.isDirty = isDirty
         self.save = save
         self.discard = discard
+        self.prepareNavigation = prepareNavigation
     }
 
     func allowNavigation() -> Bool {
+        prepareNavigation()
         guard isDirty() else { return true }
         switch decision() {
         case .save:

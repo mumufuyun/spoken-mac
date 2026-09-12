@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Network
+import Combine
 
 enum AppState: String, CaseIterable {
     case idle
@@ -36,13 +37,19 @@ class StateManager: ObservableObject {
 }
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var hotKeyService: HotKeyService!
     private var recordingPanel: NSPanel?
     private var processingNoticePanel: NSPanel?
     private var settingsWindow: NSWindow?
+    private var hotKeyNoticePanel: NSPanel?
+    private var hotKeyStateSubscription: AnyCancellable?
+    private var accessibilitySubscription: AnyCancellable?
+    private var accessibilityGuidePanel: NSPanel?
+    private var deliveryNoticePanel: NSPanel?
+    private var accessibility: AccessibilityPermissionService { .shared }
     private var recordingViewModel = RecordingViewModel()
     private var frontmostAppBeforeHotKey: NSRunningApplication?
     private let stateManager = StateManager.shared
@@ -54,6 +61,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupPopover()
         setupHotKey()
+        setupAccessibilityMonitoring()
         registerSleepWakeObservers()
         startNetworkMonitoring()
         checkPermissions()
@@ -70,8 +78,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        hotKeyService?.unregisterAll()
+        accessibility.stopMonitoring()
         networkMonitor.cancel()
         CloudSpeechService.shared.disconnect()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === accessibilityGuidePanel else { return }
+        window.contentView = nil
+        accessibilityGuidePanel = nil
     }
 
     // MARK: - Status Item
@@ -110,6 +126,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            accessibility.refresh()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
     }
@@ -157,20 +174,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupHotKey() {
         hotKeyService = HotKeyService.shared
-        hotKeyService.onTriggered = { [weak self] in
-            DispatchQueue.main.async {
-                self?.handleHotKey()
-            }
-        }
+        hotKeyService.onTriggered = { [weak self] in self?.handleHotKey() }
         hotKeyService.onEscape = { [weak self] in
-            DispatchQueue.main.async {
-                guard let strongSelf = self else { return }
-                if strongSelf.recordingPanel?.isVisible == true {
-                    strongSelf.recordingViewModel.cancel()
-                }
-            }
+            guard let self, self.recordingPanel?.isVisible == true else { return }
+            self.recordingViewModel.cancel()
+        }
+        hotKeyService.onUnavailable = { [weak self] in self?.showHotKeyNotice() }
+        // Read the completed state after @Published has updated. A queued initial/paused state
+        // must not immediately dismiss the conflict notice created by the following failure.
+        hotKeyStateSubscription = hotKeyService.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            guard let self else { return }
+            self.updateStatusItem()
+            if self.hotKeyService.warning == nil { self.hotKeyNoticePanel?.orderOut(nil); self.hotKeyNoticePanel = nil }
         }
         hotKeyService.registerAll()
+    }
+
+    /// A nonactivating notice: a conflict never moves focus away from the user's input application.
+    private func showHotKeyNotice() {
+        hotKeyNoticePanel?.orderOut(nil)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = .statusBar; panel.isOpaque = false; panel.backgroundColor = .clear
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView = NSHostingView(rootView: HotKeyMenuNotice(service: hotKeyService, onEdit: { [weak self, weak panel] in
+            self?.showSettingsWindow(section: .shortcuts)
+            panel?.orderOut(nil)
+        }).padding(12).frame(width: 380).background(SpokenTheme.background, in: RoundedRectangle(cornerRadius: 14)))
+        if let screen = NSScreen.main {
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - 400, y: screen.visibleFrame.maxY - 200))
+        }
+        hotKeyNoticePanel = panel
+        panel.orderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak panel] in
+            guard let panel, self?.hotKeyNoticePanel === panel else { return }
+            panel.orderOut(nil); self?.hotKeyNoticePanel = nil
+        }
     }
 
     // MARK: - Sleep / Wake
@@ -260,11 +300,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Recording Panel
 
     private func showRecordingPanel() {
+        accessibility.refresh()
+        deliveryNoticePanel?.orderOut(nil)
+        deliveryNoticePanel = nil
+        accessibilityGuidePanel?.close()
+        accessibilityGuidePanel = nil
         processingNoticePanel?.orderOut(nil)
         processingNoticePanel = nil
         frontmostAppBeforeHotKey = NSWorkspace.shared.frontmostApplication
         print("Spoken: [DEBUG] AppDelegate frontmost app saved: \(frontmostAppBeforeHotKey?.localizedName ?? "unknown")")
 
+        hotKeyService.setBusy(true)
         stateManager.transition(to: .starting)
 
         let viewModel = RecordingViewModel()
@@ -309,6 +355,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let panel, strongSelf.recordingPanel === panel else { return }
                 strongSelf.recordingPanel?.orderOut(nil)
                 strongSelf.recordingPanel = nil
+                strongSelf.hotKeyService.setBusy(false)
             }
         }
 
@@ -316,6 +363,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.hotKeyService.stopEscapeMonitoring()
             self?.recordingPanel?.orderOut(nil)
             self?.recordingPanel = nil
+            self?.hotKeyService.setBusy(false)
         }
 
         viewModel.onComplete = { [weak self] text, appFromViewModel in
@@ -378,40 +426,74 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func executeInjection(text: String, targetApp: NSRunningApplication?) {
-        print("Spoken: [DEBUG] frontmost app before inject: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
-
-        guard let targetApp,
-              !targetApp.isTerminated,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == targetApp.processIdentifier else {
-            print("Spoken: [WARN] Target app is no longer frontmost; copied text without automatic paste")
+        let outcome: InjectionOutcome
+        let permissionGranted = accessibility.refresh()
+        if let targetApp, !targetApp.isTerminated,
+           NSWorkspace.shared.frontmostApplication?.processIdentifier == targetApp.processIdentifier {
+            outcome = KeyboardService.shared.typeText(text)
+        } else {
             let pb = NSPasteboard.general
             pb.clearContents()
-            pb.setString(text, forType: .string)
-            PipelineLatencyMetrics.shared.finish()
-            cleanupAfterInjection()
-            return
+            outcome = pb.setString(text, forType: .string)
+                ? (permissionGranted ? .copiedToClipboard : .permissionRequired) : .clipboardFailed
         }
-
-        let success = KeyboardService.shared.typeText(text)
-        print("Spoken: [DEBUG] injection success: \(success)")
-
-        if !success {
-            print("Spoken: [WARN] Keyboard injection failed, copying to clipboard as fallback")
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setString(text, forType: .string)
-        }
-
         PipelineLatencyMetrics.shared.finish()
-        cleanupAfterInjection()
+        cleanupAfterInjection(showFallbackNotice: outcome == .inserted)
+        switch outcome {
+        case .inserted: break
+        case .permissionRequired:
+            showDeliveryNotice("文字已复制。辅助功能尚未授权或生效，请回到输入框按 ⌘V 粘贴。", authorize: true)
+        case .copiedToClipboard:
+            showDeliveryNotice("未能自动填入，文字已复制。请回到目标输入框按 ⌘V 粘贴。", authorize: accessibility.needsAttention)
+        case .clipboardFailed:
+            showDeliveryNotice("文字未能写入剪贴板，请点击重试复制。", authorize: accessibility.needsAttention, recoveryText: text)
+        }
     }
 
-    private func cleanupAfterInjection() {
+    private func showDeliveryNotice(_ message: String, authorize: Bool, recoveryText: String? = nil) {
+        deliveryNoticePanel?.orderOut(nil)
+        let combined = [message, recordingViewModel.fallbackNotice].compactMap { $0 }.joined(separator: "\n")
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 160),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = .statusBar; panel.isOpaque = false; panel.backgroundColor = .clear
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let dismiss: () -> Void = { [weak self, weak panel] in
+            panel?.orderOut(nil)
+            if self?.deliveryNoticePanel === panel { self?.deliveryNoticePanel = nil }
+        }
+        let onAuthorize: (() -> Void)? = authorize ? { [weak self] in
+            dismiss(); self?.showSettingsWindow(section: .permissions)
+        } : nil
+        let onCopy: (() -> Void)? = recoveryText.map { text in
+            { [weak self] in
+                let pb = NSPasteboard.general; pb.clearContents()
+                if pb.setString(text, forType: .string) {
+                    self?.showDeliveryNotice("文字已复制，请回到输入框按 ⌘V 粘贴。", authorize: self?.accessibility.needsAttention == true)
+                }
+            }
+        }
+        let host = NSHostingView(rootView: TextDeliveryNotice(message: combined, onAuthorize: onAuthorize,
+                                                              onCopy: onCopy, onDismiss: dismiss))
+        panel.contentView = host
+        panel.setContentSize(host.fittingSize)
+        if let screen = NSScreen.main {
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - 210, y: screen.visibleFrame.minY + 40))
+        }
+        deliveryNoticePanel = panel; panel.orderFront(nil)
+        // Clipboard failures retain an explicit retry action until dismissed or the next recording.
+        if recoveryText == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { dismiss() }
+        }
+    }
+
+    private func cleanupAfterInjection(showFallbackNotice: Bool = true) {
         hotKeyService.stopEscapeMonitoring()
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
+        hotKeyService.setBusy(false)
         stateManager.transition(to: .idle)
-        if let notice = recordingViewModel.fallbackNotice {
+        if showFallbackNotice, let notice = recordingViewModel.fallbackNotice {
             showProcessingNotice(notice)
         }
     }
@@ -448,46 +530,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permissions
 
-    private func checkPermissions() {
-        SpeechService.shared.requestPermissions { micGranted, speechGranted in
-            let accessibilityGranted = AXIsProcessTrusted()
-            print("Spoken: [DEBUG] AXIsProcessTrusted at startup: \(accessibilityGranted)")
+    private func setupAccessibilityMonitoring() {
+        accessibilitySubscription = accessibility.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.updateStatusItem()
+        }
+        accessibility.startMonitoring()
+        updateStatusItem()
+    }
 
-            if !micGranted || !speechGranted {
-                DispatchQueue.main.async {
-                    self.showPermissionAlert()
-                }
-            } else if !accessibilityGranted {
-                DispatchQueue.main.async {
-                    self.showAccessibilityPermissionGuide()
-                }
-            }
+    private func updateStatusItem() {
+        let warning = hotKeyService.warning != nil || accessibility.needsAttention
+        statusItem.button?.title = warning ? " ⚠" : ""
+        let status = "Spoken · \(hotKeyService.displayName) · \(hotKeyService.statusText) · \(accessibility.state.statusText)"
+        statusItem.button?.toolTip = status
+        statusItem.button?.setAccessibilityLabel("Spoken，" + hotKeyService.accessibilityName + "，" + hotKeyService.statusText + "，" + accessibility.state.statusText)
+    }
+
+    private func checkPermissions() {
+        SpeechService.shared.requestPermissions { [weak self] micGranted, speechGranted in
+            guard let self else { return }
+            if !micGranted || !speechGranted { self.showPermissionAlert() }
+            self.accessibility.refresh()
+            // Do not skip the text-input guide when another permission was denied.
+            if self.accessibility.needsInitialGuide { self.showAccessibilityPermissionGuide() }
         }
     }
 
     private func showAccessibilityPermissionGuide() {
-        let alert = NSAlert()
-        alert.messageText = "需要辅助功能权限"
-        alert.informativeText = """
-        Spoken 需要辅助功能权限才能将识别的文字自动输入到目标应用。
-        
-        请按以下步骤操作：
-        1. 点击下方"打开系统设置"
-        2. 在"辅助功能"列表中找到 Spoken 并开启
-        3. 如果列表中没有 Spoken，请先关闭再重新打开开关
-        4. 授权后需要重新启动 Spoken
-        
-        注意：每次从 Xcode 重新编译后，需要重新授权。
-        """
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "稍后设置")
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
-        }
+        guard !stateManager.isBusy(), accessibilityGuidePanel == nil else { return }
+        let height = min(580, (NSScreen.main?.visibleFrame.height ?? 700) - 60)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: height),
+                            styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = "Spoken · 完成自动输入设置"
+        panel.delegate = self
+        panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false
+        panel.level = .floating
+        panel.contentView = NSHostingView(rootView: AccessibilityGuideView(service: accessibility, onLater: { [weak self, weak panel] in
+            panel?.close(); self?.accessibilityGuidePanel = nil
+        }))
+        panel.center()
+        accessibilityGuidePanel = panel
+        panel.orderFront(nil)
+        accessibility.markGuidePresented()
     }
 
     private func showPermissionAlert() {
@@ -783,11 +867,15 @@ class RecordingViewModel: ObservableObject {
 struct RecordingPanelView: View {
     @ObservedObject var viewModel: RecordingViewModel
     @ObservedObject var modes: ModeStore
+    @ObservedObject var hotkeys: HotKeyService
+    @ObservedObject var accessibility: AccessibilityPermissionService
     @State private var modeError: String?
 
-    init(viewModel: RecordingViewModel, modes: ModeStore = .shared) {
+    init(viewModel: RecordingViewModel, modes: ModeStore = .shared, hotkeys: HotKeyService? = nil, accessibility: AccessibilityPermissionService? = nil) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
         _modes = ObservedObject(wrappedValue: modes)
+        _hotkeys = ObservedObject(wrappedValue: hotkeys ?? .shared)
+        _accessibility = ObservedObject(wrappedValue: accessibility ?? .shared)
     }
 
     var body: some View {
@@ -795,6 +883,11 @@ struct RecordingPanelView: View {
             HStack {
                 Text("Spoken").font(.system(size: 14, weight: .semibold, design: .rounded))
                 Spacer()
+                if accessibility.needsAttention {
+                    Text("需手动粘贴").font(.caption).foregroundStyle(.orange)
+                        .help("辅助功能尚未授权或生效，完成后请按 Command V 粘贴文字")
+                        .accessibilityLabel("辅助功能尚未授权或生效，结果需要手动粘贴")
+                }
                 Circle().fill(viewModel.isRecording ? (viewModel.isCaptureReady ? Color.green : Color.orange) : SpokenTheme.accent)
                     .frame(width: 6, height: 6)
                 Text(viewModel.isRecording ? (viewModel.isCaptureReady ? "可说话" : "准备中") : "处理中")
@@ -828,7 +921,7 @@ struct RecordingPanelView: View {
                 .lineLimit(1).truncationMode(.head).frame(maxWidth: .infinity, alignment: .trailing)
             Spacer(minLength: 0)
             HStack {
-                Text(viewModel.isRecording ? "⌥ 空格完成 · Esc 取消" : "本次配置已锁定")
+                Text(hotkeys.isRegistered ? "\(hotkeys.displayName)\(viewModel.isRecording ? "完成" : "取消") · Esc 取消" : "快捷键不可用 · Esc 取消")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { viewModel.cancel() }.controlSize(.small)

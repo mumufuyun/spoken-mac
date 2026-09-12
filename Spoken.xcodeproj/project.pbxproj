@@ -38,6 +38,9 @@
 		C2FF6E36AD02FC647D3C9976 /* SpeechSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9044B48AA4957FC4FF5B1B4F /* SpeechSettingsView.swift */; };
 		B8171959CB494079B249F67F /* ModeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2EF13BFC455138431CEC3B /* ModeSettingsView.swift */; };
 		E28219E23D6023DE7E14F296 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F809342A2D14CE9F2ED777F /* ModelSettingsView.swift */; };
+		D077CA2118F34E56BBF929A2 /* HotKeySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D077CA2118F34E56BBF929A1 /* HotKeySettingsView.swift */; };
+		A0C0E551B111400000000002 /* AccessibilityPermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C0E551B111400000000001 /* AccessibilityPermissionService.swift */; };
+		A0C0E551B111400000000004 /* AccessibilitySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C0E551B111400000000003 /* AccessibilitySettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +90,9 @@
 		9044B48AA4957FC4FF5B1B4F /* SpeechSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechSettingsView.swift; sourceTree = "<group>"; };
 		1C2EF13BFC455138431CEC3B /* ModeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeSettingsView.swift; sourceTree = "<group>"; };
 		2F809342A2D14CE9F2ED777F /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
+		D077CA2118F34E56BBF929A1 /* HotKeySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeySettingsView.swift; sourceTree = "<group>"; };
+		A0C0E551B111400000000001 /* AccessibilityPermissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityPermissionService.swift; sourceTree = "<group>"; };
+		A0C0E551B111400000000003 /* AccessibilitySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilitySettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -110,6 +116,7 @@
 				B3E2B3032758487DA5F5F1CD /* ObjCExceptionCatcher.h */,
 				4ACD7F10B12F4C56B79E31B7 /* ObjCExceptionCatcher.m */,
 				876CF505EC5F976A23DF7E41 /* HotKeyService.swift */,
+				A0C0E551B111400000000001 /* AccessibilityPermissionService.swift */,
 				BB2856E4008DD751136C6955 /* KeyboardService.swift */,
 				F8679A79BD60AE28D9BD1F79 /* AIProcessingService.swift */,
 				A9F2E14D8C5B7A3F0E1D6C4B /* SecureKeyStorage.swift */,
@@ -159,6 +166,8 @@
 				2F809342A2D14CE9F2ED777F /* ModelSettingsView.swift */,
 				1C2EF13BFC455138431CEC3B /* ModeSettingsView.swift */,
 				9044B48AA4957FC4FF5B1B4F /* SpeechSettingsView.swift */,
+				D077CA2118F34E56BBF929A1 /* HotKeySettingsView.swift */,
+				A0C0E551B111400000000003 /* AccessibilitySettingsView.swift */,
 				440A747611DF8F50EA9CC477 /* SpokenTheme.swift */,
 				80D8DB3AB22966206517C70F /* ContentView.swift */,
 			);
@@ -311,6 +320,7 @@
 				E28219E23D6023DE7E14F296 /* ModelSettingsView.swift in Sources */,
 				B8171959CB494079B249F67F /* ModeSettingsView.swift in Sources */,
 				C2FF6E36AD02FC647D3C9976 /* SpeechSettingsView.swift in Sources */,
+				D077CA2118F34E56BBF929A2 /* HotKeySettingsView.swift in Sources */,
 				7A8B4946FE174C0E27C8CC71 /* SpokenTheme.swift in Sources */,
 				7053E40C06504D290A8B1B0B /* ModelRequestAdapter.swift in Sources */,
 				981B56EFB7214116B4E99B01 /* AIOutputGuard.swift in Sources */,
@@ -319,6 +329,8 @@
 				4D9ACD1E5968A1EC6C754379 /* ModeStore.swift in Sources */,
 				00EF8C259CC61C0D089BCE64 /* ConfigurationStore.swift in Sources */,
 				74FF8327CC9A46FE97D70CD3 /* ObjCExceptionCatcher.m in Sources */,
+				A0C0E551B111400000000002 /* AccessibilityPermissionService.swift in Sources */,
+				A0C0E551B111400000000004 /* AccessibilitySettingsView.swift in Sources */,
 				118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */,
 				17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */,
 				60C395E08E0E5D7E1CA97480 /* HotKeyService.swift in Sources */,
@@ -393,7 +405,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 218;
+				CURRENT_PROJECT_VERSION = 220;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -414,7 +426,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.1.1;
+				MARKETING_VERSION = 2.2.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -477,7 +489,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 218;
+				CURRENT_PROJECT_VERSION = 220;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -492,7 +504,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.1.1;
+				MARKETING_VERSION = 2.2.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = Spoken;

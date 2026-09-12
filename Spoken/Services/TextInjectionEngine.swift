@@ -1,9 +1,12 @@
 import AppKit
 import ApplicationServices
 
-enum InjectionOutcome {
+enum InjectionOutcome: Equatable {
+    /// Paste events were sent; the destination application cannot be verified generically.
     case inserted
     case copiedToClipboard
+    case permissionRequired
+    case clipboardFailed
 }
 
 @MainActor
@@ -17,8 +20,7 @@ final class TextInjectionEngine {
         let items: [Item]
         let wasEmpty: Bool
 
-        static func capture() -> ClipboardSnapshot {
-            let pb = NSPasteboard.general
+        static func capture(from pb: NSPasteboard) -> ClipboardSnapshot {
             var items: [Item] = []
             for pbItem in pb.pasteboardItems ?? [] {
                 var dataMap: [NSPasteboard.PasteboardType: Data] = [:]
@@ -33,8 +35,7 @@ final class TextInjectionEngine {
             return ClipboardSnapshot(items: items, wasEmpty: (pb.pasteboardItems ?? []).isEmpty)
         }
 
-        func restore(expectedChangeCount: Int) {
-            let pb = NSPasteboard.general
+        func restore(to pb: NSPasteboard, expectedChangeCount: Int) {
             guard pb.changeCount == expectedChangeCount else { return }
             pb.clearContents()
             guard !wasEmpty else { return }
@@ -53,8 +54,35 @@ final class TextInjectionEngine {
 
     var preserveClipboard = true
     private var pendingClipboardRestore: PendingClipboardRestore?
+    private let pasteboard: NSPasteboard
+    private let canPaste: () -> Bool
+    private let postPaste: () -> Bool
+    private let prepareTarget: () -> Void
+    private let writeText: (String) -> Bool
+    var pendingRestoreID: UUID? { pendingClipboardRestore?.id }
+
+    convenience init() {
+        #if SPOKEN_OFFLINE_TESTS
+        preconditionFailure("Offline tests must inject text delivery dependencies")
+        #else
+        self.init(pasteboard: .general, canPaste: { AccessibilityPermissionService.shared.refresh() },
+                  postPaste: Self.simulatePasteCGEvent, prepareTarget: {
+            if let app = NSWorkspace.shared.frontmostApplication { Self.enableEnhancedAX(for: app) }
+            usleep(50_000)
+        })
+        #endif
+    }
+
+    init(pasteboard: NSPasteboard, canPaste: @escaping () -> Bool,
+         postPaste: @escaping () -> Bool, prepareTarget: @escaping () -> Void = {},
+         writeText: ((String) -> Bool)? = nil) {
+        self.pasteboard = pasteboard; self.canPaste = canPaste
+        self.postPaste = postPaste; self.prepareTarget = prepareTarget
+        self.writeText = writeText ?? { pasteboard.setString($0, forType: .string) }
+    }
 
     private struct PendingClipboardRestore {
+        let id = UUID()
         let snapshot: ClipboardSnapshot
         let changeCount: Int
     }
@@ -65,24 +93,19 @@ final class TextInjectionEngine {
         return injectViaClipboard(text)
     }
 
-    func finishClipboardRestore() {
+    func finishClipboardRestore(expectedID: UUID? = nil) {
         guard let pending = pendingClipboardRestore else { return }
+        if let expectedID, expectedID != pending.id { return }
         pendingClipboardRestore = nil
-        pending.snapshot.restore(expectedChangeCount: pending.changeCount)
+        pending.snapshot.restore(to: pasteboard, expectedChangeCount: pending.changeCount)
     }
 
     private func injectViaClipboard(_ text: String) -> InjectionOutcome {
-        let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
-
-        // Enable AX tree for Electron apps (Feishu, VS Code, etc.)
-        if let frontmostApp = NSWorkspace.shared.frontmostApplication {
-            enableEnhancedAX(for: frontmostApp)
-            usleep(50_000)
-        }
-
-        let pb = NSPasteboard.general
+        pendingClipboardRestore = nil
+        let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture(from: pasteboard) : nil
+        let pb = pasteboard
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        guard writeText(text) else { return .clipboardFailed }
         let postWriteChangeCount = pb.changeCount
         print("Spoken: [DEBUG] clipboard text prepared, length=\(text.count)")
 
@@ -91,17 +114,12 @@ final class TextInjectionEngine {
         // Use paste simulation for all apps.
         // AX direct value set is unreliable for Electron/Web apps and custom input fields,
         // causing text to become non-interactive static content.
-        // Priority: CGEvent (system-level, most reliable) → osascript (fallback)
-
-        var pasteSucceeded = false
-        if AXIsProcessTrusted() {
-            simulatePasteCGEvent()
-            usleep(100_000)
-            pasteSucceeded = true
-        } else {
-            print("Spoken: [WARN] AX not trusted, falling back to osascript paste")
-            pasteSucceeded = simulatePasteViaOsascript()
-        }
+        // Missing authorization must leave the result available for manual paste, without
+        // trying a second automation channel or restoring the previous clipboard.
+        guard canPaste() else { return .permissionRequired }
+        prepareTarget()
+        guard canPaste() else { return .permissionRequired }
+        let pasteSucceeded = postPaste()
 
         usleep(150_000)
 
@@ -122,7 +140,7 @@ final class TextInjectionEngine {
 
     // MARK: - AX Helper
 
-    private func enableEnhancedAX(for app: NSRunningApplication) {
+    private static func enableEnhancedAX(for app: NSRunningApplication) {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 0.3)
         var windowValue: CFTypeRef?
@@ -140,50 +158,20 @@ final class TextInjectionEngine {
         print("Spoken: [DEBUG] enabled AXEnhancedUserInterface for \(app.localizedName ?? "unknown")")
     }
 
-    // MARK: - osascript Paste
-
-    private func simulatePasteViaOsascript() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = [
-            "-e", "tell application \"System Events\" to keystroke \"v\" using command down"
-        ]
-
-        let pipe = Pipe()
-        process.standardError = pipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let exitCode = process.terminationStatus
-            if exitCode == 0 {
-                print("Spoken: [DEBUG] osascript exit code: 0")
-                return true
-            } else {
-                let errorData = pipe.fileHandleForReading.readDataToEndOfFile()
-                let errorMessage = String(data: errorData, encoding: .utf8) ?? "unknown"
-                print("Spoken: [DEBUG] osascript exit code: \(exitCode), error: \(errorMessage.trimmingCharacters(in: .whitespacesAndNewlines))")
-                return false
-            }
-        } catch {
-            print("Spoken: [ERROR] osascript execution failed: \(error)")
-            return false
-        }
-    }
-
     // MARK: - CGEvent Paste
 
-    private func simulatePasteCGEvent() {
+    private static func simulatePasteCGEvent() -> Bool {
         let vKeyCode: CGKeyCode = 9
 
         guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: vKeyCode, keyDown: false)
-        else { return }
+        else { return false }
 
         keyDown.flags = .maskCommand
         keyUp.flags = .maskCommand
 
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
+        return true
     }
 }

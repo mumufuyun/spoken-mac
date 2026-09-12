@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AVFoundation
+import Carbon
 
 private struct TestFailure: LocalizedError, CustomStringConvertible {
     let description: String
@@ -161,6 +162,18 @@ private final class ConfigurationFixture {
     let defaults: MemoryDefaults
     let keys = MemoryKeys()
     var failingFiles = Set<String>()
+    var permissionState: TextInputPermission = .ready
+    var settingsOpenSucceeds = true
+    var settingsOpenCount = 0
+    @MainActor lazy var accessibility = AccessibilityPermissionService(defaults: defaults,
+        readPermission: { [unowned self] in permissionState },
+        openSettings: { [unowned self] in settingsOpenCount += 1; return settingsOpenSucceeds })
+    @MainActor lazy var hotkeyRegistrar = FakeHotKeyRegistrar()
+    @MainActor lazy var hotkeys: HotKeyService = {
+        let service = HotKeyService(file: file("hotkey-v1"), registrar: hotkeyRegistrar, defaults: defaults)
+        service.registerAll()
+        return service
+    }()
     lazy var modes = ModeStore(defaults: defaults, file: file("modes"), backupFile: file("backup"))
     lazy var connections = ModelConnectionStore(defaults: defaults, file: file("connections"), keys: keys)
     init(_ values: [String: Any] = [:]) { defaults = MemoryDefaults(values) }
@@ -373,7 +386,7 @@ private struct AIProcessingRegression {
                 vm.finishAIProcessing(.success("迟到正文"), originalText: input)
                 try check(outputs.count == count, "Cancelled ViewModel emitted text")
             })
-        ] + configurationTests() + reviewTests() + outputGuardTests()
+        ] + configurationTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests()
         var failures = 0
         for (name, test) in tests {
             do { try test(); print("PASS: \(name)") }
@@ -716,13 +729,14 @@ private extension AIProcessingRegression {
                 let f = ConfigurationFixture()
                 let transport = Fixture()
                 let service = transport.service()
-                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, defaults: f.defaults)
-                let settings = SettingsView(modes: f.modes, connections: f.connections, defaults: f.defaults,
+                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults)
+                let settings = SettingsView(modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults,
                     speechDependencies: f.speechSettings, connectionTestService: service)
                 let vm = RecordingViewModel(snapshotProvider: { try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults) },
                     modeNameProvider: { f.modes.selected.name }, processor: service, stopCapture: {}, cancelCapture: {})
-                let panel = RecordingPanelView(viewModel: vm, modes: f.modes)
+                let panel = RecordingPanelView(viewModel: vm, modes: f.modes, hotkeys: f.hotkeys, accessibility: f.accessibility)
                 _ = menu.body; _ = settings.body; _ = panel.body
+                try check(menu.hotkeys === f.hotkeys && settings.hotkeys === f.hotkeys && panel.hotkeys === f.hotkeys, "Hotkey UI escaped injected service")
                 try check(menu.modes === f.modes && settings.connections === f.connections && panel.modes === f.modes,
                           "Views lost injected stores")
                 try check(f.keys.reads == 0, "View initialization unexpectedly read credentials")
@@ -982,27 +996,58 @@ private extension AIProcessingRegression {
         }
         for dark in [false, true] {
             let theme = dark ? "dark" : "light"
-            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, defaults: fixture.defaults),
+            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
                        name: "menu-\(theme)", size: NSSize(width: 380, height: 480), dark: dark)
-            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, initialSection: .modes, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .modes, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "modes-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
-            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, initialSection: .models, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .models, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "models-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
+                                    initialSection: .shortcuts, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+                       name: "shortcuts-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
+            fixture.hotkeyRegistrar.occupied.insert(fixture.hotkeys.configuration); fixture.hotkeys.recheck()
+            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+                                   hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
+                       name: "menu-conflict-\(theme)", size: NSSize(width: 380, height: 480), dark: dark)
+            fixture.hotkeyRegistrar.occupied.removeAll(); fixture.hotkeys.recheck()
             fixture.defaults.set(SpeechRecognitionProvider.cloud.rawValue, forKey: "speechRecognitionProvider")
-            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, initialSection: .speech,
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .speech,
                                     defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "speech-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
             fixture.defaults.set("领域：合成测试。表达习惯：简洁直接。", forKey: PersonalContextStore.contextKey)
-            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, initialSection: .context,
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .context,
                                     defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "context-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
+            fixture.permissionState = .notAuthorized; fixture.accessibility.refresh()
+            try render(AccessibilityGuideView(service: fixture.accessibility, onLater: {}), name: "permission-guide-\(theme)",
+                       size: NSSize(width: 480, height: 580), dark: dark)
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
+                                    initialSection: .permissions, defaults: fixture.defaults), name: "permissions-minimum-\(theme)",
+                       size: NSSize(width: 820, height: 580), dark: dark)
+            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+                                   hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, panelHeight: 300),
+                       name: "menu-permissions-minimum-\(theme)", size: NSSize(width: 380, height: 300), dark: dark)
+            try render(TextDeliveryNotice(message: "文字已复制。辅助功能尚未授权或生效，请回到输入框按 ⌘V 粘贴。", onAuthorize: {}, onDismiss: {}),
+                       name: "permission-delivery-\(theme)", size: NSSize(width: 420, height: 132), dark: dark)
             let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "Preview cannot process") }, modeNameProvider: { "AI 指令" }, stopCapture: {}, cancelCapture: {})
             vm.isRecording = true; vm.isCaptureReady = true; vm.showsModes = true
             vm.statusText = "这是一段合成语音，用于界面检查。"
-            try render(RecordingPanelView(viewModel: vm, modes: fixture.modes), name: "recording-\(theme)",
+            try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-\(theme)",
                        size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+            fixture.permissionState = .ready; fixture.accessibility.refresh()
         }
-        try render(SettingsView(modes: fixture.modes, connections: fixture.connections, defaults: fixture.defaults), name: "settings-minimum",
+        try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+                               hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, panelHeight: 300),
+                   name: "menu-minimum", size: NSSize(width: 380, height: 300), dark: false)
+        fixture.hotkeyRegistrar.occupied.insert(fixture.hotkeys.configuration); fixture.hotkeys.recheck()
+        try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+                               hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, panelHeight: 300),
+                   name: "menu-conflict-minimum", size: NSSize(width: 380, height: 300), dark: true)
+        fixture.hotkeyRegistrar.occupied.removeAll(); fixture.hotkeys.recheck()
+        try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults), name: "settings-minimum",
+                   size: NSSize(width: 820, height: 580), dark: false)
+        try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
+                                initialSection: .shortcuts, defaults: fixture.defaults), name: "shortcuts-minimum",
                    size: NSSize(width: 820, height: 580), dark: false)
         if let frontmost, let after = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             try check(after == frontmost, "Preview panels stole foreground application focus")
@@ -1051,19 +1096,26 @@ private struct InteractiveSmokeView: View {
                 Toggle("模拟保存失败", isOn: $failWrites).toggleStyle(.checkbox)
                 Toggle("模拟语音密钥读取失败", isOn: $failSpeechKeyRead).toggleStyle(.checkbox)
             }.padding(12)
+            HStack {
+                Text("辅助功能模拟").font(.caption)
+                Button("未授权") { fixture.permissionState = .notAuthorized; fixture.accessibility.refresh() }
+                Button("已授权") { fixture.permissionState = .ready; fixture.accessibility.refresh() }
+                Button("授权未生效") { fixture.permissionState = .eventPostingDenied; fixture.accessibility.refresh() }
+                Button("设置打开失败") { fixture.settingsOpenSucceeds = false; fixture.accessibility.openSettings() }
+            }.padding(8)
             Divider()
             if showingRecording, let recordingModel {
                 VStack(spacing: 16) {
                     Text("录音浮窗组件 · 嵌入测试窗口，不验证跨应用焦点")
                         .font(.caption).foregroundStyle(.secondary)
-                    RecordingPanelView(viewModel: recordingModel, modes: fixture.modes).frame(width: 420)
+                    RecordingPanelView(viewModel: recordingModel, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility).frame(width: 420)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if showMenu {
                 ContentView(onOpenSettings: { section in settingsSection = section; showMenu = false },
-                            modes: fixture.modes, connections: fixture.connections, defaults: fixture.defaults)
+                            modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                SettingsView(modes: fixture.modes, connections: fixture.connections, initialSection: settingsSection,
+                SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: settingsSection,
                              defaults: fixture.defaults, speechDependencies: speechDependencies, connectionTestService: service)
             }
             Divider()
@@ -1073,7 +1125,7 @@ private struct InteractiveSmokeView: View {
                 if let recordingModel { Button("完成合成语音") { recordingModel.stopRecording() } }
             }.padding(10)
         }
-        .onChange(of: failWrites) { _, failing in fixture.failingFiles = failing ? ["modes", "connections"] : [] }
+        .onChange(of: failWrites) { _, failing in fixture.failingFiles = failing ? ["modes", "connections", "hotkey-v1"] : [] }
     }
 
     @MainActor
@@ -1282,6 +1334,356 @@ private extension AIProcessingRegression {
                 let body = String(repeating: "请检查 API 配置与条件，保留确定程度。\n", count: 2000).trimmingCharacters(in: .whitespacesAndNewlines)
                 let text = String(repeating: "<think>hidden</think>", count: 1000) + body
                 try check(try AIOutputGuard.clean(text, policy: AIOutputPolicy(stripWrappers: false)) == body, "Long response lost body or leaked reasoning")
+            })
+        ]
+    }
+}
+
+
+@MainActor
+private final class FakeHotKeyRegistrar: HotKeyRegistering {
+    var onEvent: ((UInt32, Bool) -> Void)?
+    var occupied = Set<HotKeyConfiguration>()
+    var systemOccupied = Set<HotKeyConfiguration>()
+    var registrations: [UInt32: HotKeyConfiguration] = [:]
+    var registerCalls = 0
+    var checks = 0
+    var down = false
+    var failure: Error?
+    var onRegister: ((UInt32) -> Void)?
+    func checkSystem(_ configuration: HotKeyConfiguration) throws {
+        checks += 1
+        if systemOccupied.contains(configuration) { throw HotKeyFailure.occupied }
+    }
+    func register(_ configuration: HotKeyConfiguration, id: UInt32) throws {
+        registerCalls += 1
+        if let failure { throw failure }
+        if occupied.contains(configuration) { throw HotKeyFailure.occupied }
+        if registrations.values.contains(configuration) { throw HotKeyFailure.system("重复注册", -1) }
+        registrations[id] = configuration
+        onRegister?(id)
+    }
+    func unregister(_ id: UInt32) { registrations.removeValue(forKey: id) }
+    func isKeyDown(_ keyCode: UInt32) -> Bool { down }
+    func shutdown() { registrations.removeAll() }
+    func press() { if let id = registrations.keys.first { onEvent?(id, true) } }
+    func release() { if let id = registrations.keys.first { onEvent?(id, false) } }
+}
+
+@MainActor
+private extension AIProcessingRegression {
+    static func hotkeyTests() -> [(String, () throws -> Void)] {
+        let custom = HotKeyConfiguration(keyCode: 40, modifiers: UInt32(controlKey | optionKey))
+        let alternate = HotKeyConfiguration(keyCode: 90, modifiers: UInt32(cmdKey | controlKey | optionKey))
+        return [
+            ("Hotkey: default validates and uses physical codes", {
+                try HotKeyConfiguration.standard.validateSpokenCommands()
+                try custom.validateSpokenCommands(); try alternate.validateSpokenCommands()
+                try check(HotKeyConfiguration.standard.displayName == "⌥ 空格", "Wrong default label")
+                try check(custom.accessibilityName.contains("控制键") && custom.accessibilityName.contains("选项键"), "Missing Chinese accessibility name")
+                try check(HotKeyConfiguration.modifiers(from: [.command, .shift, .capsLock, .function]) == UInt32(cmdKey | shiftKey), "Unexpected persisted modifiers")
+            }),
+            ("Hotkey: bare, Shift-only, Esc, modifiers, Fn and unknown keys rejected", {
+                for candidate in [HotKeyConfiguration(keyCode: 0, modifiers: 0),
+                    HotKeyConfiguration(keyCode: 0, modifiers: UInt32(shiftKey)),
+                    HotKeyConfiguration(keyCode: 53, modifiers: UInt32(cmdKey)),
+                    HotKeyConfiguration(keyCode: 58, modifiers: UInt32(optionKey)),
+                    HotKeyConfiguration(keyCode: 63, modifiers: UInt32(optionKey)),
+                    HotKeyConfiguration(keyCode: 300, modifiers: UInt32(cmdKey)),
+                    HotKeyConfiguration(version: 2, keyCode: 49, modifiers: UInt32(optionKey))] {
+                    try mustThrow { try candidate.validate() }
+                }
+            }),
+            ("Hotkey: Spoken save and window commands rejected", {
+                for code: UInt32 in [1, 12, 13, 43, 8, 9] {
+                    try mustThrow { try HotKeyConfiguration(keyCode: code, modifiers: UInt32(cmdKey)).validateSpokenCommands() }
+                }
+            }),
+            ("Hotkey: first launch occupied default is unavailable, preserved and not auto-replaced", {
+                let f = ConfigurationFixture(); f.hotkeyRegistrar.occupied.insert(.standard)
+                let h = f.hotkeys
+                try check(h.configuration == .standard && h.warning != nil && !h.isRegistered && !h.showsGuide, "Occupied default marked usable")
+                try check(f.hotkeyRegistrar.registrations.isEmpty, "Occupied default registered")
+                try check(!FileManager.default.fileExists(atPath: f.file("hotkey-v1").url.path), "Startup wrote configuration")
+            }),
+            ("Hotkey: system enabled shortcut rejected before Carbon registration", {
+                let f = ConfigurationFixture(); f.hotkeyRegistrar.systemOccupied.insert(.standard)
+                try check(f.hotkeys.warning != nil && f.hotkeyRegistrar.registerCalls == 0, "System conflict skipped")
+            }),
+            ("Hotkey: saved custom remains selected on occupied restart", {
+                let f = ConfigurationFixture(); try f.file("hotkey-v1").save(custom)
+                f.hotkeyRegistrar.occupied.insert(custom)
+                try check(f.hotkeys.configuration == custom && !f.hotkeys.isRegistered, "Custom silently reverted")
+                try check(try f.file("hotkey-v1").read(HotKeyConfiguration.self) == custom, "Saved shortcut changed")
+            }),
+            ("Hotkey: occupied new candidate keeps working key and draft", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; let editor = HotKeyEditor(service: h)
+                editor.capture(custom); f.hotkeyRegistrar.occupied.insert(custom)
+                try mustThrow { try editor.save() }
+                try check(h.isRegistered && h.configuration == .standard && editor.draft == custom && editor.isDirty, "Failed candidate replaced working key or draft")
+                try check(f.hotkeyRegistrar.registrations.count == 1, "Registration leaked")
+                var triggered = 0; h.onTriggered = { triggered += 1 }; f.hotkeyRegistrar.press()
+                try check(triggered == 1, "Old shortcut stopped working")
+            }),
+            ("Hotkey: restoring an occupied default preserves the custom key", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; try h.save(custom)
+                f.hotkeyRegistrar.occupied.insert(.standard)
+                let editor = HotKeyEditor(service: h); editor.restoreDefault()
+                try check(h.configuration == custom && h.isRegistered && editor.draft == .standard && editor.error != nil, "Default bypassed conflict checks")
+                try check(try f.file("hotkey-v1").read(HotKeyConfiguration.self) == custom, "Default overwrote persisted custom")
+            }),
+            ("Hotkey: atomic save failure rolls back temporary registration", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; try h.save(custom)
+                f.failingFiles.insert("hotkey-v1")
+                try mustThrow { try h.save(alternate) }
+                try check(h.configuration == custom && h.isRegistered && Array(f.hotkeyRegistrar.registrations.values) == [custom], "Disk failure damaged working state")
+                try check(try f.file("hotkey-v1").read(HotKeyConfiguration.self) == custom, "Disk failure damaged file")
+            }),
+            ("Hotkey: successful switch persists and old/staged events cannot trigger", {
+                let f = ConfigurationFixture(); let h = f.hotkeys
+                let oldID = f.hotkeyRegistrar.registrations.keys.first!
+                var triggered = 0; h.onTriggered = { triggered += 1 }
+                f.hotkeyRegistrar.onRegister = { id in f.hotkeyRegistrar.onEvent?(id, true) }
+                try h.save(custom)
+                f.hotkeyRegistrar.onRegister = nil
+                f.hotkeyRegistrar.onEvent?(oldID, true)
+                try check(triggered == 0 && h.isRegistered && f.hotkeyRegistrar.registrations.count == 1, "Staged or old event triggered")
+                f.hotkeyRegistrar.press(); try check(triggered == 1, "New shortcut did not trigger")
+                let restarted = HotKeyService(file: f.file("hotkey-v1"), registrar: FakeHotKeyRegistrar(), defaults: f.defaults)
+                restarted.registerAll(); try check(restarted.configuration == custom && restarted.isRegistered, "Restart lost saved shortcut")
+            }),
+            ("Hotkey: same combination and repeated start do not register twice", {
+                let f = ConfigurationFixture(); let h = f.hotkeys
+                h.registerAll(); try h.save(.standard); try h.save(.standard)
+                try check(f.hotkeyRegistrar.registerCalls == 1 && f.hotkeyRegistrar.registrations.count == 1, "Duplicate registration")
+            }),
+            ("Hotkey: wake failure changes status and retry clears warning", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; var notices = 0
+                h.onUnavailable = { notices += 1 }
+                f.hotkeyRegistrar.occupied.insert(.standard); h.handleWake(); h.handleWake()
+                try check(h.warning != nil && !h.isRegistered && notices == 1, "Wake failure or duplicate notices")
+                f.hotkeyRegistrar.occupied.removeAll(); h.recheck()
+                try check(h.isRegistered && h.warning == nil && h.configuration == .standard, "Retry did not recover")
+            }),
+            ("Hotkey: capture suspends own registration and resumes", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; let id = f.hotkeyRegistrar.registrations.keys.first!
+                var triggered = 0; h.onTriggered = { triggered += 1 }
+                try h.beginCapture(); try h.beginCapture(); f.hotkeyRegistrar.onEvent?(id, true)
+                try check(h.isCapturing && h.state == .paused && f.hotkeyRegistrar.registrations.isEmpty && triggered == 0, "Capture fired recording")
+                h.handleWake(); try check(h.state == .paused, "Wake reenabled capture")
+                h.endCapture(); h.endCapture()
+                try check(h.isRegistered && f.hotkeyRegistrar.registrations.count == 1, "Capture did not restore")
+            }),
+            ("Hotkey: capture restore failure is unavailable, not enabled", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; try h.beginCapture()
+                f.hotkeyRegistrar.occupied.insert(.standard); h.endCapture()
+                try check(!h.isCapturing && !h.isRegistered && h.warning != nil, "Resume failure hidden")
+                f.hotkeyRegistrar.occupied.removeAll(); h.recheck(); try check(h.isRegistered, "Resume retry failed")
+            }),
+            ("Hotkey: busy prohibits save, capture and restore-default", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; try h.save(custom); h.setBusy(true)
+                try mustThrow { try h.save(alternate) }; try mustThrow { try h.beginCapture() }
+                let editor = HotKeyEditor(service: h); editor.restoreDefault()
+                try check(h.configuration == custom && editor.error != nil && h.isRegistered, "Busy edit allowed")
+                h.setBusy(false); try h.save(alternate); try check(h.configuration == alternate, "Busy lock never released")
+            }),
+            ("Hotkey: key hold deduplicates while repeated presses still trigger", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; var triggered = 0; h.onTriggered = { triggered += 1 }
+                for _ in 0..<10 { f.hotkeyRegistrar.press() }
+                try check(triggered == 1, "Hold repeated")
+                f.hotkeyRegistrar.release(); f.hotkeyRegistrar.press()
+                try check(triggered == 2, "Second press lost")
+            }),
+            ("Hotkey: a key already held on resume waits for release", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; var triggered = 0; h.onTriggered = { triggered += 1 }
+                try h.beginCapture(); f.hotkeyRegistrar.down = true; h.endCapture(); f.hotkeyRegistrar.press()
+                try check(triggered == 0, "Captured held key activated recording")
+                f.hotkeyRegistrar.release(); f.hotkeyRegistrar.press(); try check(triggered == 1, "Release did not rearm")
+            }),
+            ("Hotkey: corrupt configuration stays untouched until a successful save", {
+                let f = ConfigurationFixture(); try FileManager.default.createDirectory(at: f.root, withIntermediateDirectories: true)
+                let bytes = Data("invalid-config".utf8); try bytes.write(to: f.file("hotkey-v1").url)
+                let h = f.hotkeys
+                try check(h.warning != nil && !h.isRegistered && (try Data(contentsOf: f.file("hotkey-v1").url)) == bytes, "Corrupt config silently replaced")
+                try h.save(custom); try check(h.isRegistered && h.configuration == custom, "Could not repair config")
+            }),
+            ("Hotkey: registration error code is visible and leaves old key", {
+                let f = ConfigurationFixture(); let h = f.hotkeys
+                f.hotkeyRegistrar.failure = HotKeyFailure.system("注册", -9876)
+                try mustThrow { try h.save(custom) }
+                try check(h.isRegistered && h.configuration == .standard, "API failure replaced active key")
+                h.handleWake(); try check(h.warning?.contains("-9876") == true, "API error hidden")
+            }),
+            ("Hotkey: one-time guide acknowledges explicitly and yields to conflict", {
+                let f = ConfigurationFixture(); let h = f.hotkeys
+                try check(h.showsGuide, "New guide missing")
+                try h.beginCapture(); try check(!h.showsGuide, "Guide shown during capture"); h.endCapture()
+                h.acknowledgeGuide(); try check(!h.showsGuide, "Guide acknowledgment failed")
+                let restarted = HotKeyService(file: f.file("hotkey-v1"), registrar: FakeHotKeyRegistrar(), defaults: f.defaults)
+                restarted.registerAll(); try check(!restarted.showsGuide, "Guide repeated after restart")
+            }),
+            ("Hotkey: navigation stops capture even when user cancels leaving", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; let editor = HotKeyEditor(service: h)
+                editor.capture(custom); try h.beginCapture()
+                let guarder = SettingsNavigationGuard(decision: { .cancel }, reportFailure: { _ in })
+                guarder.install(isDirty: { editor.isDirty }, save: editor.save, discard: editor.discard, prepareNavigation: editor.finishCapture)
+                try check(!guarder.allowNavigation() && !h.isCapturing && h.isRegistered && editor.isDirty, "Navigation cancel left hotkey paused or lost draft")
+            }),
+            ("Hotkey: recorder accepts on key-up without starting recording", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; let capture = HotKeyCaptureSession(service: h)
+                var result: HotKeyConfiguration?; var triggers = 0
+                h.onTriggered = { triggers += 1 }; capture.onCaptured = { result = $0 }
+                try capture.begin()
+                capture.consume(keyCode: custom.keyCode, flags: [.control, .option], down: true)
+                try check(result == nil && h.isCapturing && !h.isRegistered, "Accepted before key release")
+                capture.consume(keyCode: custom.keyCode, flags: [.control, .option], down: true, isRepeat: true)
+                capture.consume(keyCode: custom.keyCode, flags: [], down: false)
+                try check(result == custom && !capture.active && h.isRegistered && triggers == 0, "Capture key-up failed or started recording")
+            }),
+            ("Hotkey: Esc cancels pending candidate and restores", {
+                let f = ConfigurationFixture(); let capture = HotKeyCaptureSession(service: f.hotkeys)
+                var result: HotKeyConfiguration?; capture.onCaptured = { result = $0 }
+                try capture.begin(); capture.consume(keyCode: custom.keyCode, flags: [.control, .option], down: true)
+                capture.consume(keyCode: 53, flags: [], down: true)
+                try check(result == nil && !capture.active && f.hotkeys.isRegistered, "Esc saved a candidate or failed to restore")
+            }),
+            ("Hotkey: invalid and Spoken command keys stay in capture", {
+                let f = ConfigurationFixture(); let capture = HotKeyCaptureSession(service: f.hotkeys)
+                var errors = 0; capture.onError = { _ in errors += 1 }; try capture.begin()
+                capture.consume(keyCode: 1, flags: [.command], down: true)
+                capture.consume(keyCode: 1, flags: [], down: true)
+                try check(errors == 2 && capture.pending == nil && capture.active && !f.hotkeys.isRegistered, "Invalid key escaped recorder")
+                capture.finish(); try check(f.hotkeys.isRegistered, "Blur/close did not restore")
+            }),
+            ("Hotkey: shutdown clears registration and ignores stale events", {
+                let f = ConfigurationFixture(); let h = f.hotkeys; let id = f.hotkeyRegistrar.registrations.keys.first!
+                var triggered = 0; h.onTriggered = { triggered += 1 }; h.unregisterAll()
+                f.hotkeyRegistrar.onEvent?(id, true); h.handleWake()
+                try check(triggered == 0 && f.hotkeyRegistrar.registrations.isEmpty && !h.isRegistered, "Shutdown leaked registration")
+            })
+        ]
+    }
+}
+
+@MainActor
+private extension AIProcessingRegression {
+    static func accessibilityTests() -> [(String, () throws -> Void)] {
+        [
+            ("Accessibility: startup guide is shown only for missing permission", {
+                let f = ConfigurationFixture(); f.permissionState = .notAuthorized
+                try check(f.accessibility.needsInitialGuide && f.accessibility.needsAttention, "Denied startup hidden")
+                f.permissionState = .ready; f.accessibility.refresh()
+                try check(!f.accessibility.needsInitialGuide && !f.accessibility.needsAttention, "Granted startup warned")
+            }),
+            ("Accessibility: skipping guide survives restart without hiding permission warning", {
+                let f = ConfigurationFixture(); f.permissionState = .notAuthorized
+                f.accessibility.markGuidePresented()
+                let restarted = AccessibilityPermissionService(defaults: f.defaults, readPermission: { .notAuthorized }, openSettings: { true })
+                try check(!restarted.needsInitialGuide && restarted.needsAttention, "Skip suppressed warning or repeated guide")
+            }),
+            ("Accessibility: opening settings never marks authorization as granted", {
+                let f = ConfigurationFixture(); f.permissionState = .notAuthorized
+                f.accessibility.openSettings()
+                try check(f.settingsOpenCount == 1 && !f.accessibility.canAutoPaste, "Opening settings inferred grant")
+                f.accessibility.recheck()
+                try check(f.accessibility.feedback?.contains("尚未") == true, "Recheck concealed missing permission")
+            }),
+            ("Accessibility: failed system settings open provides manual route", {
+                let f = ConfigurationFixture(); f.permissionState = .notAuthorized; f.settingsOpenSucceeds = false
+                f.accessibility.openSettings()
+                try check(f.accessibility.feedback?.contains("隐私与安全性") == true && f.accessibility.needsAttention, "Missing settings failure path")
+            }),
+            ("Accessibility: grant then revocation updates live state and clears stale feedback", {
+                let f = ConfigurationFixture(); f.permissionState = .notAuthorized
+                f.accessibility.recheck(); f.permissionState = .ready
+                try check(f.accessibility.refresh() && f.accessibility.feedback == nil, "Grant not recognized")
+                f.permissionState = .notAuthorized
+                try check(!f.accessibility.refresh() && f.accessibility.needsAttention, "Revocation not recognized")
+            }),
+            ("Accessibility: AX trust without event posting access is not ready", {
+                let f = ConfigurationFixture(); f.permissionState = .eventPostingDenied
+                try check(!f.accessibility.canAutoPaste && f.accessibility.state.statusText.contains("尚未生效"), "Partial authorization marked ready")
+            }),
+            ("Accessibility: settings polling is bounded and guide visibility balances", {
+                let f = ConfigurationFixture(); var date = Date(timeIntervalSince1970: 100)
+                let service = AccessibilityPermissionService(defaults: f.defaults, readPermission: { .notAuthorized }, openSettings: { true }, now: { date })
+                try check(!service.shouldPoll, "Background polling unbounded")
+                service.openSettings(); try check(service.shouldPoll, "Not polling after settings opened")
+                date = date.addingTimeInterval(121); try check(!service.shouldPoll, "Polling did not expire")
+                service.guideAppeared(); service.guideAppeared(); service.guideDisappeared()
+                try check(service.shouldPoll, "Second guide lost monitoring")
+                service.guideDisappeared(); service.guideDisappeared()
+                try check(!service.shouldPoll, "Dismissed guide keeps polling")
+            }),
+            ("Accessibility: current application reveal only runs on user action", {
+                let f = ConfigurationFixture(); var reveals = 0
+                let service = AccessibilityPermissionService(defaults: f.defaults, readPermission: { .ready }, openSettings: { true }, revealApplication: { reveals += 1 })
+                service.refresh(); try check(reveals == 0, "Finder opened implicitly")
+                service.revealApplication(); try check(reveals == 1, "Reveal action missing")
+            }),
+            ("Accessibility: all view roots use injected status without touching TCC", {
+                let f = ConfigurationFixture(); f.permissionState = .notAuthorized
+                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults)
+                let settings = SettingsView(modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, initialSection: .permissions, defaults: f.defaults)
+                let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "Unused") }, modeNameProvider: { "测试" }, stopCapture: {}, cancelCapture: {})
+                let panel = RecordingPanelView(viewModel: vm, modes: f.modes, hotkeys: f.hotkeys, accessibility: f.accessibility)
+                try check(menu.accessibility === f.accessibility && settings.accessibility === f.accessibility && panel.accessibility === f.accessibility, "Permission singleton leaked into fake UI")
+            }),
+            ("Injection: missing permission keeps result for manual paste without AX or events", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                pb.setString("old clipboard", forType: .string)
+                var posts = 0; var prepares = 0
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { false }, postPaste: { posts += 1; return true }, prepareTarget: { prepares += 1 })
+                try check(engine.inject("synthetic result") == .permissionRequired, "Permission failure not distinguished")
+                engine.finishClipboardRestore()
+                try check(pb.string(forType: .string) == "synthetic result" && posts == 0 && prepares == 0, "Fallback was lost or automation attempted")
+            }),
+            ("Injection: permission revoked during target preparation prevents paste", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                var granted = true; var posts = 0
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { granted }, postPaste: { posts += 1; return true }, prepareTarget: { granted = false })
+                try check(engine.inject("synthetic result") == .permissionRequired && posts == 0, "Revocation bypassed final check")
+                try check(pb.string(forType: .string) == "synthetic result", "Result missing")
+            }),
+            ("Injection: failed event creation keeps clipboard and does not report sent", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { true }, postPaste: { false })
+                try check(engine.inject("synthetic result") == .copiedToClipboard, "Failed post marked inserted")
+                engine.finishClipboardRestore()
+                try check(pb.string(forType: .string) == "synthetic result", "Failed post result restored away")
+            }),
+            ("Injection: clipboard failure stops before permission or paste and supports retry", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                var writes = 0; var checks = 0; var posts = 0
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { checks += 1; return true }, postPaste: { posts += 1; return true }, writeText: { text in
+                    writes += 1; return writes > 1 ? pb.setString(text, forType: .string) : false
+                })
+                try check(engine.inject("synthetic result") == .clipboardFailed && checks == 0 && posts == 0, "False copy success")
+                try check(engine.inject("synthetic result") == .inserted && posts == 1, "Retry cannot deliver")
+            }),
+            ("Injection: authorized paste restores clipboard only if unchanged", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                pb.setString("old clipboard", forType: .string)
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { true }, postPaste: { true })
+                try check(engine.inject("synthetic result") == .inserted, "Authorized paste failed")
+                engine.finishClipboardRestore()
+                try check(pb.string(forType: .string) == "old clipboard", "Old clipboard not restored")
+                _ = engine.inject("another result"); pb.clearContents(); pb.setString("user copied", forType: .string)
+                engine.finishClipboardRestore()
+                try check(pb.string(forType: .string) == "user copied", "User clipboard overwritten")
+            }),
+            ("Injection: old restore callback cannot consume next delivery or missing-permission fallback", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                var granted = true
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { granted }, postPaste: { true })
+                _ = engine.inject("first")
+                guard let oldID = engine.pendingRestoreID else {
+                    throw TestFailure(description: "Named clipboard is unavailable; run in a macOS graphical session with pasteboard service access")
+                }
+                _ = engine.inject("second"); engine.finishClipboardRestore(expectedID: oldID)
+                try check(pb.string(forType: .string) == "second" && engine.pendingRestoreID != nil, "Stale callback restored next output")
+                granted = false; _ = engine.inject("manual result"); engine.finishClipboardRestore(expectedID: oldID)
+                try check(pb.string(forType: .string) == "manual result", "Fallback lost after previous success")
             })
         ]
     }

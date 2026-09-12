@@ -4,15 +4,21 @@ struct ContentView: View {
     let onOpenSettings: (SettingsSection) -> Void
     @ObservedObject var modes: ModeStore
     @ObservedObject var connections: ModelConnectionStore
+    @ObservedObject var hotkeys: HotKeyService
+    @ObservedObject var accessibility: AccessibilityPermissionService
     @AppStorage("translateLang") private var language = TranslateLanguage.original.rawValue
     @State private var error: String?
     @State private var suggestion = ""
+    private let heightOverride: CGFloat?
 
     init(onOpenSettings: @escaping (SettingsSection) -> Void, modes: ModeStore = .shared,
-         connections: ModelConnectionStore = .shared, defaults: UserDefaults = .standard) {
+         connections: ModelConnectionStore = .shared, hotkeys: HotKeyService? = nil, accessibility: AccessibilityPermissionService? = nil, defaults: UserDefaults = .standard, panelHeight: CGFloat? = nil) {
         self.onOpenSettings = onOpenSettings
+        heightOverride = panelHeight
         _modes = ObservedObject(wrappedValue: modes)
         _connections = ObservedObject(wrappedValue: connections)
+        _hotkeys = ObservedObject(wrappedValue: hotkeys ?? .shared)
+        _accessibility = ObservedObject(wrappedValue: accessibility ?? .shared)
         _language = AppStorage(wrappedValue: TranslateLanguage.original.rawValue, "translateLang", store: defaults)
     }
 
@@ -24,14 +30,25 @@ struct ContentView: View {
                     Text("把想法说出来").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("⌥ 空格").font(.system(.caption, design: .monospaced))
-                    .padding(6).background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 6))
+                Button { onOpenSettings(.shortcuts) } label: {
+                    HStack(spacing: 4) {
+                        if hotkeys.warning != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                        Text(hotkeys.displayName).font(.system(.caption, design: .monospaced))
+                    }.padding(6).background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 6))
+                }.buttonStyle(.plain).help("快捷键与操作 · " + hotkeys.statusText)
+                    .accessibilityLabel("快捷键与操作：" + hotkeys.accessibilityName + "，" + hotkeys.statusText)
                 Button(action: { onOpenSettings(.modes) }) { Image(systemName: "gearshape") }
                     .buttonStyle(.plain).help("设置").accessibilityLabel("设置")
             }
             ScrollView {
-                ModeGrid(modes: modes.modes, selectedID: modes.selected.id, onSelect: selectMode,
-                         onManage: { onOpenSettings(.modes) })
+                VStack(alignment: .leading, spacing: 14) {
+                    AccessibilityMenuNotice(service: accessibility, onGuide: { onOpenSettings(.permissions) })
+                    if !accessibility.needsAttention || hotkeys.warning != nil {
+                        HotKeyMenuNotice(service: hotkeys, onEdit: { onOpenSettings(.shortcuts) })
+                    }
+                    ModeGrid(modes: modes.modes, selectedID: modes.selected.id, onSelect: selectMode,
+                             onManage: { onOpenSettings(.modes) })
+                }
             }
             Divider()
             VStack(spacing: 10) {
@@ -64,13 +81,13 @@ struct ContentView: View {
                 Button("当前连接缺少密钥，前往配置") { onOpenSettings(.models) }.font(.caption)
             }
             HStack {
-                Text(suggestion.isEmpty ? "再次按快捷键完成输入" : suggestion)
+                Text(hotkeys.warning != nil ? "快捷键不可用，请先修改或重新检测" : (suggestion.isEmpty ? "回到输入框，按 \(hotkeys.displayName) 开始" : suggestion))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).help(suggestion)
                 Spacer()
                 Button("退出") { NSApplication.shared.terminate(nil) }.buttonStyle(.plain).font(.caption)
             }
         }
-        .padding(18).frame(width: 380, height: Self.panelHeight)
+        .padding(18).frame(width: 380, height: heightOverride ?? Self.panelHeight)
         .background(SpokenTheme.background).tint(SpokenTheme.accent)
         .onAppear {
             if let app = NSWorkspace.shared.frontmostApplication,
@@ -87,12 +104,14 @@ struct ContentView: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case modes, models, speech, context
+    case modes, models, shortcuts, permissions, speech, context
     var id: String { rawValue }
     var title: String {
         switch self {
         case .modes: return "模式与提示词"
         case .models: return "AI 模型"
+        case .shortcuts: return "快捷键与操作"
+        case .permissions: return "权限与授权"
         case .speech: return "语音识别"
         case .context: return "个人背景"
         }
@@ -101,6 +120,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .modes: return "square.grid.2x2"
         case .models: return "cpu"
+        case .shortcuts: return "keyboard"
+        case .permissions: return "hand.raised"
         case .speech: return "waveform"
         case .context: return "person.crop.circle"
         }
@@ -109,6 +130,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .modes: return "让每一种表达，都有适合的处理方式。"
         case .models: return "保存常用连接，所有模式共用当前模型。"
+        case .shortcuts: return "设置顺手的组合，随时开始表达。"
+        case .permissions: return "确认自动输入权限，完成授权后即可直接填入输入框。"
         case .speech: return "选择适合你的语音识别方式。"
         case .context: return "帮助模型理解你的术语和表达习惯。"
         }
@@ -120,15 +143,19 @@ struct SettingsView: View {
     @StateObject private var navigation = SettingsNavigationGuard()
     @ObservedObject var modes: ModeStore
     @ObservedObject var connections: ModelConnectionStore
+    @ObservedObject var hotkeys: HotKeyService
+    @ObservedObject var accessibility: AccessibilityPermissionService
     let defaults: UserDefaults
     let speechDependencies: SpeechSettingsDependencies
     let connectionTestService: AIProcessingService
 
-    init(modes: ModeStore = .shared, connections: ModelConnectionStore = .shared, initialSection: SettingsSection = .modes,
+    init(modes: ModeStore = .shared, connections: ModelConnectionStore = .shared, hotkeys: HotKeyService? = nil, accessibility: AccessibilityPermissionService? = nil, initialSection: SettingsSection = .modes,
          defaults: UserDefaults = .standard, speechDependencies: SpeechSettingsDependencies = .live,
          connectionTestService: AIProcessingService = AIProcessingService(recordsMetrics: false)) {
         _modes = ObservedObject(wrappedValue: modes)
         _connections = ObservedObject(wrappedValue: connections)
+        _hotkeys = ObservedObject(wrappedValue: hotkeys ?? .shared)
+        _accessibility = ObservedObject(wrappedValue: accessibility ?? .shared)
         self.defaults = defaults; self.speechDependencies = speechDependencies
         self.connectionTestService = connectionTestService
         _section = State(initialValue: initialSection)
@@ -143,10 +170,17 @@ struct SettingsView: View {
                     Button {
                         if item != section && navigation.allowNavigation() { section = item }
                     } label: {
-                        Label(item.title, systemImage: item.icon).font(.system(size: 13, weight: .medium))
+                        HStack(spacing: 6) {
+                            Label(item.title, systemImage: item.icon).font(.system(size: 13, weight: .medium))
+                            if item == .permissions && accessibility.needsAttention {
+                                Image(systemName: "exclamationmark.circle.fill").font(.caption)
+                                    .foregroundStyle(.orange).accessibilityHidden(true)
+                            }
+                        }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                             .background(section == item ? SpokenTheme.surface : .clear, in: RoundedRectangle(cornerRadius: 10))
                     }.buttonStyle(.plain).accessibilityValue(section == item ? "已选择" : "")
+                        .accessibilityLabel(item.title + (item == .permissions && accessibility.needsAttention ? "，待授权" : ""))
                 }
                 Spacer()
                 Text("语言是最好的输入").font(.caption).foregroundStyle(.secondary).padding(10)
@@ -162,6 +196,8 @@ struct SettingsView: View {
                     switch section {
                     case .modes: ModeSettingsView(store: modes, navigation: navigation)
                     case .models: ModelSettingsView(store: connections, navigation: navigation, testService: connectionTestService)
+                    case .shortcuts: HotKeySettingsView(service: hotkeys, navigation: navigation)
+                    case .permissions: AccessibilitySettingsView(service: accessibility, navigation: navigation)
                     case .speech: SpeechConfigSectionView(navigation: navigation, dependencies: speechDependencies).padding(24)
                     case .context: PersonalSettingsView(navigation: navigation, defaults: defaults).padding(24)
                     }
