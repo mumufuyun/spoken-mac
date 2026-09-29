@@ -108,7 +108,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .modes: return "模式与提示词"
+        case .modes: return "模式"
         case .models: return "AI 模型"
         case .shortcuts: return "快捷键与操作"
         case .permissions: return "权限与授权"

@@ -45,6 +45,19 @@ enum WritingScene: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// 设置页展示的一句用户说明，不暴露任何内部处理规则文本。
+    var settingsDescription: String {
+        switch self {
+        case .rawTranscript: return "原语言下直接使用识别文本，不调用 AI；指定输出语言时仅做翻译。"
+        case .casualChat: return "整理成发给熟人、家人或朋友的消息，保留你的语气和口语感。"
+        case .workMessage: return "整理成简洁、明确、礼貌的工作消息，可发给同事、领导、客户或合作方。"
+        case .formalDocument: return "整理成严谨、完整的书面材料，例如报告、方案、PRD 或汇报。"
+        case .meetingNotes: return "按明确结论、待办事项和待确认问题整理会议内容。"
+        case .contentShare: return "整理成面向读者的分享内容，保留你的真实观点和个人风格。"
+        case .aiInstruction: return "整理成可以直接发送给另一个 AI 的指令。"
+        }
+    }
+
     static let defaultsKey = "writingScene"
 
     static func load(from defaults: UserDefaults = .standard) -> WritingScene {
