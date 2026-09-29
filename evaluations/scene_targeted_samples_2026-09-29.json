@@ -1,0 +1,488 @@
+[
+  {
+    "id": "C1",
+    "title": "日常聊天·停顿清理",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "短",
+    "focus": "清理口头停顿（嗯、那个）但保留口语感和“可能”",
+    "input": "嗯那个妈，我今晚加班，可能得十点多才到家，你们先吃，别等我了啊。"
+  },
+  {
+    "id": "C2",
+    "title": "日常聊天·情绪保留",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "中",
+    "focus": "情绪不淡化也不放大，不添加安抚式客套",
+    "input": "我真的气死了，楼上装修又钻了一下午，周末也不停，我都跟物业说了两回了还是没用，你帮我想想怎么办，我现在脑仁疼。"
+  },
+  {
+    "id": "C3",
+    "title": "日常聊天·改口修正",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "中",
+    "focus": "口头改口以修正后内容为准",
+    "input": "那个书我放哪儿了呢，哦对，书架第二层，不对不对，是第三层，第二层放的是你的笔记本，你找的时候别翻错了。"
+  },
+  {
+    "id": "C4",
+    "title": "日常聊天·同音误识别",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "中",
+    "focus": "高置信同音修复（红富土→红富士），含义不明的保持原样",
+    "input": "下班帮我带一袋苹果，就是那种红富土，别买成青苹果了，上次那个太酸。"
+  },
+  {
+    "id": "C5",
+    "title": "日常聊天·中英术语保留",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "中",
+    "focus": "iPhone、WiFi等术语正确保留，不添加解释",
+    "input": "你帮我看看我那个iPhone手机怎么回事，WiFi老是断，蓝牙连耳机也卡，重启也没用，是不是系统该更新了。"
+  },
+  {
+    "id": "C6",
+    "title": "日常聊天·不加客套",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "中",
+    "focus": "关心语气保留，但不添加“您多保重”式客套或祝福",
+    "input": "妈，降压药你记得按时吃，今天早上那顿吃了没？别嫌麻烦，吃完了跟我说一声。"
+  },
+  {
+    "id": "C7",
+    "title": "日常聊天·时间变更",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "短",
+    "focus": "时间、变更事实准确保留，不得写错对象",
+    "input": "我们明天打球改成下午三点，原来订的四点的场地我给退了，三点别迟到。"
+  },
+  {
+    "id": "C8",
+    "title": "日常聊天·个人风格",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "长",
+    "focus": "语气和个人风格保留，不书面化、不加评论",
+    "input": "跟你说个巨搞笑的事，今天我坐地铁，旁边一大爷外放刷短视频，声音贼大，全车厢都看他，他自己浑然不觉还跟着哼，结果坐过站了，一抬头嗷一嗓子把全车都逗笑了。我憋笑憋得肚子疼，下次你坐地铁也注意点，别跟大爷似的。"
+  },
+  {
+    "id": "C9",
+    "title": "日常聊天·转述不混为己事",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "中",
+    "focus": "转述他人的事不写成用户自己的经历或观点",
+    "input": "我表姐家孩子考上重点高中了，全家都可高兴了，她说孩子这一年真是拼了，周末都在补课。我妈让我跟你说一声，回头一起吃个饭庆祝庆祝。"
+  },
+  {
+    "id": "W1",
+    "title": "工作沟通·多事项分段",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "多个独立事项分段或列要点，事实不串",
+    "input": "同步三件事。第一，官网改版今天已经上线，目前访问正常。第二，有客户反馈导出功能在Safari上有兼容问题，技术那边在看。第三，下周的客户拜访方案我明天发群里，大家提前看看有没有问题。"
+  },
+  {
+    "id": "W2",
+    "title": "工作沟通·诉求突出",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "明确诉求与时间要求予以突出，不弱化",
+    "input": "张工，BioMaster那个内存泄漏的修复方案我昨天发你了，麻烦你今天下班前给我一个反馈，客户那边催得比较紧，如果今天定不下来我需要提前跟他们打招呼。"
+  },
+  {
+    "id": "W3",
+    "title": "工作沟通·缓冲保留",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "“预计”“可能顺延”等边界不得改成确定时间",
+    "input": "这个版本我们预计下周三前后发布，不过具体时间还得看测试结果，如果性能压测不过可能要顺延，大家先按这个时间准备，有变动我再通知。"
+  },
+  {
+    "id": "W4",
+    "title": "工作沟通·客户回复",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "长",
+    "focus": "礼貌得体；“初步估计”边界保留，不编造承诺",
+    "input": "李老师您好，我是科学空间的小王。您上次提的批量导入文献的需求，我们评估过了，初步判断可以做，开发周期大概两到三周，但这还只是初步估计，准确排期要等这周评审完才能给您。另外您说的机构账号折扣的事，我问了下商务同事，他们说明天直接跟您联系。"
+  },
+  {
+    "id": "W5",
+    "title": "工作沟通·不编造行动项",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "没有明确下一步时不得编造行动项、负责人或时间",
+    "input": "今天讨论下来感觉新用户的激活率还是偏低，数据上看主要卡在注册后的第一天。具体怎么改进大家再想想，目前还没有定方案。"
+  },
+  {
+    "id": "W6",
+    "title": "工作沟通·改口顺延",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "以修正后的安排为准，原因保留",
+    "input": "会议纪要我改成周三下午发，原计划周二，周二我要先去客户现场，所以顺延一天，给大家带来的不便抱歉。"
+  },
+  {
+    "id": "W7",
+    "title": "工作沟通·考虑≠指派",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "“在想让谁做”不得写成“由谁负责”",
+    "input": "数据分析这块，我在想是让小李来做还是外包，小李手头已经有两个项目了，我还没跟他聊，这周我先评估一下工作量再说。"
+  },
+  {
+    "id": "W8",
+    "title": "工作沟通·术语还原",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "中",
+    "focus": "“阿皮哎”→API、“西爱”→CI等高置信术语还原",
+    "input": "阿皮哎的报错率今天降下来了，但是西爱的流水线又挂了，你帮我看看是不是缓存的问题，不行就先回滚到上一个版本。"
+  },
+  {
+    "id": "W9",
+    "title": "工作沟通·分散归并",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "长",
+    "focus": "分散在两处的同一事项归并；“倾向”“可能”“还没确认”保留",
+    "input": "关于Q4的预算我先说个大概。市场活动这块可能要追加十万左右，具体数字财务还没确认。另外研发的服务器费用有个问题，上个月超了百分之二十，需要排查。对了回到市场活动，追加的部分主要想投在高校渠道，这个事我倾向先做但还没定。服务器那边，运维说可能是新上的模型服务太吃资源，让他们这周给个报告。"
+  },
+  {
+    "id": "F1",
+    "title": "正式材料·口语重构",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "长",
+    "focus": "口语化碎片重构为书面段落；“我觉得第一步”保持为建议",
+    "input": "就是那个数据平台的事啊，我们现在的问题是数据太散了，各个团队自己的表自己管，想用的时候找不到，找到了格式还对不上，所以我觉得第一步得先把元数据管起来，建一个统一的目录，不然谈什么数据治理都是空的。"
+  },
+  {
+    "id": "F2",
+    "title": "正式材料·通顺也书面化",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "中",
+    "focus": "原文基本通顺也要完成书面化，不照抄",
+    "input": "本季度用户留存率较上季度提升了五个百分点，主要得益于新手引导的优化。下季度我们将继续优化核心工作流，目标是把留存率再提升三个百分点。"
+  },
+  {
+    "id": "F3",
+    "title": "正式材料·推测非结论",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "中",
+    "focus": "“可能”“粗略估计”“没有直接证据”不得写成确定结论",
+    "input": "从数据看，活跃用户里高校师生占比可能在四成左右，这只是粗略估计，因为还有百分之三十的用户身份不明确。我推测研究生群体可能是增长最快的，但目前没有直接证据。"
+  },
+  {
+    "id": "F4",
+    "title": "正式材料·并列判断",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "长",
+    "focus": "多个并列判断用编号或段落清楚呈现，有佐证与判断区分",
+    "input": "对这次故障我有几个判断。一是直接原因是缓存穿透，这个有日志佐证。二是根本原因是容量规划不足，高峰期余量太小。三是监控告警有盲区，缓存命中率没有纳入告警。这三个是不同层面的问题，需要分别改进。"
+  },
+  {
+    "id": "F5",
+    "title": "正式材料·数字保真",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "中",
+    "focus": "三组数字与单位逐项保留，不四舍五入不合并",
+    "input": "这次改版涉及三个核心指标：注册转化率从百分之十二提升到百分之十五，次日留存从百分之三十五提升到百分之四十，平均激活时长从八分钟压缩到五分钟以内。"
+  },
+  {
+    "id": "F6",
+    "title": "正式材料·不补因果",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "中",
+    "focus": "相邻提及的两件事不补因果关系",
+    "input": "用户活跃度最近两周下降了百分之八，同期我们发布了新版本，也赶上高校放暑假。具体是哪个原因导致的，现在还不清楚，需要做进一步分析。"
+  },
+  {
+    "id": "F7",
+    "title": "正式材料·方案与风险",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "长",
+    "focus": "方案与风险分层呈现；“还没有量化评估”保留",
+    "input": "方案上建议分两期。第一期先把文献调研的准确率提上去，这是用户抱怨最多的。第二期再扩展写作辅助。风险有两个：一是算力成本可能扛不住并发，二是高质量语料不够，这两个风险都还没有量化评估。"
+  },
+  {
+    "id": "F8",
+    "title": "正式材料·术语还原",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "中",
+    "focus": "塞大师→SciMaster、拜欧大师→BioMaster高置信还原",
+    "input": "塞大师在上个版本接入了向量数据库，召回率有明显提升，但拜欧大师的数据清洗模块还是瓶颈，建议下个迭代优先解决。"
+  },
+  {
+    "id": "F9",
+    "title": "正式材料·不扩写限制",
+    "expected_scene": "正式材料",
+    "target_mode_id": "formal_document",
+    "length_class": "长",
+    "focus": "遵循“只整理要点不扩写成完整方案”；“倾向”保留",
+    "input": "帮我把下面这段整理成方案要点，不要扩写成完整方案：智能问答助手，目标用户是研究生，核心功能三个，文献问答、实验记录整理、写作润色，先做文献问答，其他两个二期再说，技术上倾向用现成的模型不做自研。"
+  },
+  {
+    "id": "M1",
+    "title": "会议记录·三类归类",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "长",
+    "focus": "结论、待办、待确认正确归类",
+    "input": "今天评审会定了三件事。第一，v2.0版本十月十五号发布，这个已经确认。第二，帮助文档由小张在十月十号前更新完。第三，有个争议没定：社区版要不要开放API，产品和商务意见不一致，下次会再讨论。"
+  },
+  {
+    "id": "M2",
+    "title": "会议记录·建议含动作非待办",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "中",
+    "focus": "建议即使含动作和时间也不列待办",
+    "input": "会上聊到用户增长，老王建议这个月先在两所高校做试点，找二十个学生试用。不过这只是建议，大家还没讨论完，更没有定下来谁来做。"
+  },
+  {
+    "id": "M3",
+    "title": "会议记录·无待办不编造",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "中",
+    "focus": "改进措施明确说“下次再定”时，不编造待办",
+    "input": "今天我们主要复盘了上周的服务器故障，原因是磁盘满了，监控没告警。大家分析了半天，经验教训聊了不少，但具体的改进措施说下次专题会再定。"
+  },
+  {
+    "id": "M4",
+    "title": "会议记录·非会议思考",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "中",
+    "focus": "明确说不是开会的个人思考，要点整理不套会议模板",
+    "input": "我刚刚自己琢磨了一下，不是开会定的。首页那个改版也许可以把搜索框挪到中间，再把推荐流往下放。就是个想法，没跟任何人讨论过，也没定。"
+  },
+  {
+    "id": "M5",
+    "title": "会议记录·分歧与安排",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "长",
+    "focus": "双方分歧入待确认；“各自准备数据下周五再议”是明确安排入待办",
+    "input": "关于定价方案会上分歧比较大。销售团队认为应该降低门槛出个人版，定价每月九十九。研发团队担心个人版服务成本扛不住，倾向先只做团队版。两种意见都有道理，最后没有结论，让两个团队各自准备数据，下周五再议。"
+  },
+  {
+    "id": "M6",
+    "title": "会议记录·明确拍板",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "中",
+    "focus": "明确拍板入结论，明确安排（运维今晚回滚）入待办",
+    "input": "讨论了一个小时，最后拍板了：新功能先不上，回滚到稳定版，今晚就执行，运维负责。大家都没有异议。"
+  },
+  {
+    "id": "M7",
+    "title": "会议记录·下次时间",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "短",
+    "focus": "短内容要点化；改后的时间地点保留",
+    "input": "今天会就到这，没形成什么结论，下次会议改到周四下午三点，还是在老会议室。"
+  },
+  {
+    "id": "M8",
+    "title": "会议记录·极短无结构",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "短",
+    "focus": "极短内容不强行套模板；“明天给三个版本”如实呈现",
+    "input": "碰了一下，海报文案还没定，设计师说明天给三个版本。"
+  },
+  {
+    "id": "M9",
+    "title": "会议记录·提议未确认",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "中",
+    "focus": "“听听就行、没定、没沟通”的提议不得列入待办或写责任人",
+    "input": "有个想法大家听听就行：要不要让小李先搭个原型看看？不过这事不急，也没定要不要做，更没有跟他本人沟通过，就是先提出来备着。"
+  },
+  {
+    "id": "P1",
+    "title": "内容分享·两层分段",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "中",
+    "focus": "事实叙述与个人感受分层呈现",
+    "input": "上周末去爬了香山，人特别多，爬到一半还下了点小雨，路有点滑。不过雨停之后空气特别好，在山顶看城里雾蒙蒙的挺有味道。感觉忙了一个月，出一次汗整个人都松下来了。"
+  },
+  {
+    "id": "P2",
+    "title": "内容分享·否定保留",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "中",
+    "focus": "“想说这个不是炫耀什么”这类否定和限定必须保留",
+    "input": "今天带爸妈去试了家新餐厅，菜确实不错，价格也实在。想说这个不是炫耀什么，就是觉得他们这代人很少舍得在外面吃饭，能带他们出来吃一顿，我挺开心的。"
+  },
+  {
+    "id": "P3",
+    "title": "内容分享·不补感悟",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "短",
+    "focus": "纯事实不补感悟、总结或升华",
+    "input": "今天把拖了两个月的体检做了，指标都正常。"
+  },
+  {
+    "id": "P4",
+    "title": "内容分享·结构缺判断",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "中",
+    "focus": "用户要求“中间讲判断”但没给判断内容，不得编造",
+    "input": "这个月团队完成了三个功能上线，加班也不少。我想发一段团队动态，前面讲做了什么，中间讲我的判断，最后收尾一句：继续加油。"
+  },
+  {
+    "id": "P5",
+    "title": "内容分享·按要求收尾",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "中",
+    "focus": "按明确要求收尾，不加额外升华或展望",
+    "input": "记录一下：今天第一次独立完成了一台实验，前面手忙脚乱，后面越来越顺。帮我把这段整理成分享，最后明确加一句总结：实验能力就是练出来的。不要再加别的升华。"
+  },
+  {
+    "id": "P6",
+    "title": "内容分享·情绪不放大",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "中",
+    "focus": "低落的情绪保留但不放大、不鸡汤化",
+    "input": "今天项目被毙了，准备了俩月，说不难过是假的，但也能理解老板的决定，资源确实紧张。就这样吧，整理整理思路再想下一个。"
+  },
+  {
+    "id": "P7",
+    "title": "内容分享·极短不扩写",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "短",
+    "focus": "极短内容不强行分段、不扩写",
+    "input": "楼下的桂花开了，香。"
+  },
+  {
+    "id": "P8",
+    "title": "内容分享·数据克制",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "中",
+    "focus": "数字保真；“不算快”的克制保留，不拔高不拔鸡血",
+    "input": "坚持跑步三个月，一共跑了四十次，配速从七分半提到六分半，体重掉了三公斤。不算快，但在往前走。"
+  },
+  {
+    "id": "P9",
+    "title": "内容分享·不营销腔",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "长",
+    "focus": "真实体验含不足（标注功能糙），不写营销话术",
+    "input": "我们公司做了个文献管理的小工具，我自己用了两周，查文献确实快了不少，以前翻十几篇才能找到的现在一两次就出来。想发个朋友圈推荐一下，但别写成广告，就说说我自己的使用感受，好用的点说，还没做好的地方也可以提一句：标注功能还比较糙。"
+  },
+  {
+    "id": "A1",
+    "title": "AI指令·简单指令",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "短",
+    "focus": "简单请求保持简洁自然",
+    "input": "帮我把这封邮件翻译成英文，语气正式一点。"
+  },
+  {
+    "id": "A2",
+    "title": "AI指令·背景与格式",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "中",
+    "focus": "目标、背景、格式要求组织清楚；数字保留",
+    "input": "帮我写一份产品周报，背景：这周上线了搜索功能，修复了十二个bug，下周计划做性能优化。格式要求：分本周进展、数据情况、下周计划三段，每段不超过一百字。"
+  },
+  {
+    "id": "A3",
+    "title": "AI指令·分散归并",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "长",
+    "focus": "分散在两处的涨价原因和过渡期归并；数字保留",
+    "input": "帮我起草一份给代理商的通知。先说涨价的事，从明年一月起上调百分之八。对了涨价的原因要写一下，主要是算力成本。还有，老客户有过渡期，到明年三月。原因里再补一句，汇率波动也有影响。通知最后要留商务的联系方式。"
+  },
+  {
+    "id": "A4",
+    "title": "AI指令·代码文件名",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "中",
+    "focus": "文件名、函数名、错误码原样保留",
+    "input": "帮我看一下src目录下auth.ts这个文件，特别是handleLogin函数里token刷新的逻辑，报错是401，错误信息我贴在后面，帮我定位可能的原因。"
+  },
+  {
+    "id": "A5",
+    "title": "AI指令·相邻不建关系",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "中",
+    "focus": "相邻提到的两个方案不补先后、依赖或对应关系",
+    "input": "帮我比较一下两个方案。一个是用向量数据库做语义检索，另一个是团队打算明年自研embedding模型。就分别列出优缺点，我没说它们之间有什么先后或者依赖关系。"
+  },
+  {
+    "id": "A6",
+    "title": "AI指令·Spoken转换",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "中",
+    "focus": "对Spoken的称呼转化为对目标AI的任务要求；约束逐项保留",
+    "input": "Spoken，帮我把这段整理成发给AI的指令：帮我设计一个三天的京都亲子游行程，两个大人带一个六岁的孩子，节奏慢一点，每天最多三个景点，要有午休时间。"
+  },
+  {
+    "id": "A7",
+    "title": "AI指令·提及不延伸",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "中",
+    "focus": "顺带提及的背景不延伸进指令，更不替用户做决定",
+    "input": "帮我润色这封求职信。顺便说一句，我最近也在考虑要不要转行做产品经理，但这只是背景，信里不用提。"
+  },
+  {
+    "id": "A8",
+    "title": "AI指令·缺失不替决定",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "中",
+    "focus": "没想的输出格式、性能要求保持未说，不替用户补",
+    "input": "帮我把这个需求整理成给AI的指令：做个图片批处理脚本，输入是一个文件夹，输出格式我还没想好，性能要求也没定。"
+  },
+  {
+    "id": "A9",
+    "title": "AI指令·多项约束",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "长",
+    "focus": "三产品×三维度×数字限制逐项保留；否定要求（不加别的、不替选择）保留",
+    "input": "帮我做一个竞品分析，对象是三款产品：Notion、Obsidian和Logseq。要求：每款产品从定价、核心功能、目标用户三个维度对比，定价要写明具体套餐价格，功能部分每个产品最多列五点，最后给一张对比表。注意只分析这三款，不要加别的产品，结论部分不要替我做选择，把差异摆清楚就行。"
+  }
+]

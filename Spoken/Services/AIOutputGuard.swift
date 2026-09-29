@@ -145,7 +145,7 @@ enum AIOutputGuard {
         }
         // Old built-ins alone remove presentation prefixes. Never normalize custom Markdown/code.
         if policy.stripWrappers {
-            let wrapper = regex(#"(?is)^\s*(?:以下是对语音转录的整理结果(?:，?作为发送给另一个?\s*AI\s*的直接可执行指令)?|以下是整理后的(?:文本|内容|指令)|整理结果如下)\s*[：:]\s*"#)
+            let wrapper = regex(#"(?is)^\s*(?:以下是对语音转录的整理结果(?:，?作为发送给另一个?\s*AI\s*的直接可执行指令)?|以下是整理后的(?:文本|内容|指令)|整理结果如下|根据(?:语音|转录|录音)[^\n：:]{0,12}?整理如下)\s*[：:]\s*"#)
             result = wrapper.stringByReplacingMatches(in: result, range: fullRange(result), withTemplate: "")
             result = result.precomposedStringWithCompatibilityMapping
         }

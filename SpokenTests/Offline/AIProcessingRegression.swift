@@ -493,7 +493,14 @@ private extension AIProcessingRegression {
                     try check(!rules.contains(AIProcessingService.sceneSafetyRules), "Legacy base duplicated")
                     try check(rules.contains("只整理原话"), "Built-in became an answering mode")
                 }
-                try check(PromptComposer.defaultSceneRules(for: .aiInstruction).contains("只整理指令"), "AI instruction task changed")
+                let instruction = PromptComposer.defaultSceneRules(for: .aiInstruction)
+                try check(instruction.contains("可直接执行指令") && instruction.contains("让目标 AI 无需再次拆解"), "AI instruction task changed")
+                try check(instruction.contains("未明确说出的目标、动机和要求保持未说"), "Instruction boundary missing")
+                try check(PromptComposer.defaultSceneRules(for: .meetingNotes).contains("建议和设想不是待办"), "Meeting boundary missing")
+                try check(PromptComposer.defaultSceneRules(for: .meetingNotes).contains("不直接照抄"), "Meeting fallback missing")
+                try check(PromptComposer.defaultSceneRules(for: .contentShare).contains("分开呈现"), "Share layering missing")
+                try check(PromptComposer.defaultSceneRules(for: .formalDocument).contains("即使原文基本通顺"), "Document processing weakened")
+                try check(PromptComposer.defaultBaseRules.contains("整理必须实际做到位") && PromptComposer.defaultBaseRules.contains("底线是不编内容"), "Base balance missing")
                 let mode = ModeDefinition(id: UUID().uuidString, name: "问答", sceneRules: "直接回答问题")
                 let result = PromptComposer.systemPrompt(mode: mode, baseRules: "共同规则", language: .japanese, personalContext: "称呼：不该注入的名字\n领域：测试")
                 try check(result.contains("共同规则") && result.contains("直接回答问题") && result.contains("日文"), "Composition lost a section")
@@ -1261,6 +1268,8 @@ private extension AIProcessingRegression {
                     let once = try AIOutputGuard.clean(text)
                     try check(once == "正文" && (try AIOutputGuard.clean(once)) == once, "Repeated guard changed content")
                 }
+                try check(try AIOutputGuard.clean("根据语音内容整理如下：\n正文", policy: AIOutputPolicy(stripWrappers: true)) == "正文", "Transcript wrapper survived")
+                try check(try AIOutputGuard.clean("根据语音内容整理如下：\n正文", policy: AIOutputPolicy(stripWrappers: false)) == "根据语音内容整理如下：\n正文", "Custom prefix stripped")
                 for text in ["<final>正文", "<final>正文</final>hidden", "hidden<final>正文</final>", "<final>正文</final><final>other</final>"] {
                     try expectFailure(AIProcessingService.validatedOutput(text), code: "unsafe_output")
                 }
