@@ -7,10 +7,12 @@ cd "$SPOKEN_ROOT"
 SPOKEN_BUILD="$SPOKEN_ROOT/build/local"
 SPOKEN_APP="$SPOKEN_ROOT/build/Spoken.app"
 SPOKEN_TARGET="$(uname -m)-apple-macosx14.0"
+# 清空旧产物，避免遗留的 ._* AppleDouble 文件被签入包内
+rm -rf "$SPOKEN_APP"
 mkdir -p "$SPOKEN_BUILD" "$SPOKEN_APP/Contents/MacOS" "$SPOKEN_APP/Contents/Resources"
 
 SPOKEN_SOURCES=()
-while IFS= read -r source; do SPOKEN_SOURCES+=("$source"); done < <(find Spoken -type f -name '*.swift' | LC_ALL=C sort)
+while IFS= read -r source; do SPOKEN_SOURCES+=("$source"); done < <(find Spoken -type f -name '*.swift' ! -name '._*' | LC_ALL=C sort)
 xcrun clang -target "$SPOKEN_TARGET" -fobjc-arc -c Spoken/Services/ObjCExceptionCatcher.m -o "$SPOKEN_BUILD/ObjCExceptionCatcher.o"
 xcrun swiftc -target "$SPOKEN_TARGET" -swift-version 5 -O \
   -module-cache-path "$SPOKEN_BUILD/module-cache" \
@@ -34,6 +36,9 @@ info.update(CFBundleExecutable='Spoken', CFBundleIdentifier='com.moss.spoken', C
 info.pop('CFBundleIconName', None)
 Path('build/Spoken.app/Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
+# 外置卷会为文件生成 ._* AppleDouble 垃圾，签名前必须清除，否则会被当作包组件
+find "$SPOKEN_APP" -name '._*' -delete 2>/dev/null || true
 codesign --force --sign - --timestamp=none --entitlements Spoken/Spoken.entitlements "$SPOKEN_APP"
+find "$SPOKEN_APP" -name '._*' -delete 2>/dev/null || true
 codesign --verify --strict "$SPOKEN_APP"
 printf 'Built local app: %s\n' "$SPOKEN_APP"
