@@ -506,6 +506,49 @@ private extension AIProcessingRegression {
                 try check(result.contains("共同规则") && result.contains("直接回答问题") && result.contains("日文"), "Composition lost a section")
                 try check(!result.contains("不该注入的名字") && result.contains("领域：测试"), "Personal context filtering regressed")
             }),
+            ("Legacy v2 constants match the pre-iteration defaults", {
+                try check(LegacyPromptsV2.sceneRules(for: .aiInstruction).contains("优先明确任务目标"), "Legacy AI rules drifted")
+                try check(LegacyPromptsV2.sceneRules(for: .aiInstruction).hasSuffix("不补写事实、观点或行动项。"), "Legacy suffix wrong")
+                try check(LegacyPromptsV2.baseRules.contains("中英混合识别") && LegacyPromptsV2.baseRules != PromptComposer.defaultBaseRules, "Legacy base rules drifted")
+            }),
+            ("v2 configuration refreshes untouched built-in rules and preserves user edits", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 2
+                legacy.baseRules = LegacyPromptsV2.baseRules
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                                   sceneRules: LegacyPromptsV2.sceneRules(for: scene), builtin: scene)
+                }
+                let customText = "我自己改过的指令规则"
+                legacy.modes[legacy.modes.firstIndex { $0.builtin == .aiInstruction }!].sceneRules = customText
+                legacy.selectedID = WritingScene.workMessage.storageID
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 3, "Migration did not complete")
+                try check(f.modes.configuration.baseRules == PromptComposer.defaultBaseRules, "Base rules not refreshed")
+                try check(f.modes.selected.builtin == .workMessage, "Selection lost")
+                try check(f.modes.modes.first { $0.builtin == .casualChat }!.sceneRules == PromptComposer.defaultSceneRules(for: .casualChat), "Untouched rules not refreshed")
+                try check(f.modes.modes.first { $0.builtin == .aiInstruction }!.sceneRules == customText, "User edit overwritten")
+                try check(try f.file("modes").read(ModeConfiguration.self)!.version == 3, "Migration not persisted")
+            }),
+            ("Failed v2 migration leaves the original file intact for retry", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 2
+                legacy.baseRules = LegacyPromptsV2.baseRules
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                                   sceneRules: LegacyPromptsV2.sceneRules(for: scene), builtin: scene)
+                }
+                try f.file("modes").save(legacy)
+                f.failingFiles.insert("modes")
+                try check(f.modes.loadError != nil, "Migration failure hidden")
+                let persisted = try f.file("modes").read(ModeConfiguration.self)!
+                try check(persisted.version == 2 && persisted.baseRules == LegacyPromptsV2.baseRules, "Failed migration overwrote file")
+                f.failingFiles = []
+                f.modes.reload()
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 3, "Retry failed")
+            }),
             ("Clean connection installation never reads legacy Keychain", {
                 let f = ConfigurationFixture(); f.keys.failRead = true
                 try check(f.connections.loadError == nil && f.connections.connections.isEmpty, "Clean install attempted legacy key read")

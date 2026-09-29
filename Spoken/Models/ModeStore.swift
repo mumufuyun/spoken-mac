@@ -40,7 +40,7 @@ extension ModeDefinition {
 }
 
 struct ModeConfiguration: Codable, Equatable {
-    var version = 2
+    var version = 3
     var baseRules = PromptComposer.defaultBaseRules
     var modes = WritingScene.allCases.map(ModeDefinition.preset)
     var selectedID = WritingScene.rawTranscript.storageID
@@ -81,8 +81,15 @@ final class ModeStore: ObservableObject {
     func reload() {
         do {
             if let saved = try file.read(ModeConfiguration.self) {
-                try validate(saved)
-                configuration = saved
+                if saved.version == 2 {
+                    let migrated = Self.migratingV2(saved)
+                    try validate(migrated)
+                    try file.save(migrated)
+                    configuration = migrated
+                } else {
+                    try validate(saved)
+                    configuration = saved
+                }
             } else {
                 // Never overwrite the original backup after a crash between backup and migration.
                 if try backupFile.read(LegacyPromptBackup.self) == nil {
@@ -189,8 +196,24 @@ final class ModeStore: ObservableObject {
         }
     }
 
+    /// v2→v3：提示词整体迭代后，只刷新与旧默认值逐字一致（即从未被用户编辑过）的基础规则和内置场景规则。
+    private static func migratingV2(_ saved: ModeConfiguration) -> ModeConfiguration {
+        var next = saved
+        next.version = 3
+        if next.baseRules == LegacyPromptsV2.baseRules {
+            next.baseRules = PromptComposer.defaultBaseRules
+        }
+        next.modes = next.modes.map { mode in
+            guard let scene = mode.builtin, mode.sceneRules == LegacyPromptsV2.sceneRules(for: scene) else { return mode }
+            var refreshed = mode
+            refreshed.sceneRules = PromptComposer.defaultSceneRules(for: scene)
+            return refreshed
+        }
+        return next
+    }
+
     private func validate(_ value: ModeConfiguration) throws {
-        guard value.version == 2 else { throw ConfigurationError.invalid("模式配置版本不受支持，请保留原文件") }
+        guard value.version == 3 else { throw ConfigurationError.invalid("模式配置版本不受支持，请保留原文件") }
         guard !value.baseRules.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ConfigurationError.invalid("基础规则不能为空")
         }

@@ -42,7 +42,7 @@ MiniMax Token Plan 和普通 API 分别保存密钥；切换接入方式或供�
 
 配置位于 `~/Library/Application Support/Spoken/Configuration/`：
 
-- `modes-v2.json`：基础规则、模式和当前选择。
+- `modes-v2.json`：基础规则、模式和当前选择。提示词整体迭代后配置版本从 2 升到 3：与旧默认值逐字一致（即从未编辑过）的基础规则和内置场景规则自动替换为新版，用户修改过的内容原样保留；迁移写入失败时原文件不变，下次启动重试。
 - `legacy-prompts-v1.json`：升级前的完整 Prompt 和原有覆盖值，只生成一次。
 - `model-connections-v1.json`：连接参数、当前连接和钥匙串引用，不包含密钥正文。
 
