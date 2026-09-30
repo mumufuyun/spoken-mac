@@ -96,7 +96,7 @@ struct ModeSettingsView: View {
                         }
                     } else {
                         RuleEditor(title: "场景规则", detail: "定义要完成的任务、语气和格式。例：回答语音中的问题，先给结论，再列出三个建议。无需填写文本占位符。", text: $editor.draft.sceneRules, minHeight: 250)
-                        Text("菜单栏明确指定的输出语言优先于场景语言要求。")
+                        Text("自定义模式按此处规则执行，不附加内置基础规则和输出语言；个人背景继续生效；所有模式统一附加最终回复约束，防止推理过程混入正文。")
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Button("恢复默认场景") { editor.draft.sceneRules = PromptComposer.defaultCustomRules }

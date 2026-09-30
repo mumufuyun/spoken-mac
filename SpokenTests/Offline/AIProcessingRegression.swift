@@ -503,8 +503,12 @@ private extension AIProcessingRegression {
                 try check(PromptComposer.defaultBaseRules.contains("整理必须实际做到位") && PromptComposer.defaultBaseRules.contains("底线是不编内容"), "Base balance missing")
                 let mode = ModeDefinition(id: UUID().uuidString, name: "问答", sceneRules: "直接回答问题")
                 let result = PromptComposer.systemPrompt(mode: mode, baseRules: "共同规则", language: .japanese, personalContext: "称呼：不该注入的名字\n领域：测试")
-                try check(result.contains("共同规则") && result.contains("直接回答问题") && result.contains("日文"), "Composition lost a section")
-                try check(!result.contains("不该注入的名字") && result.contains("领域：测试"), "Personal context filtering regressed")
+                try check(result.contains("直接回答问题") && result.contains("领域：测试"), "Custom mode lost user rules or personal context")
+                try check(!result.contains("共同规则") && !result.contains("日文") && !result.contains("不该注入的名字"), "Custom mode picked up base rules, language or unfiltered context")
+                try check(result.hasSuffix(PromptComposer.outputContract), "Custom mode missed the output contract")
+                let builtIn = PromptComposer.systemPrompt(mode: .preset(.workMessage), baseRules: "共同规则", language: .japanese, personalContext: "称呼：不该注入的名字\n领域：测试")
+                try check(builtIn.contains("共同规则") && builtIn.contains("日文") && builtIn.hasSuffix(PromptComposer.outputContract), "Built-in composition lost a section")
+                try check(!builtIn.contains("不该注入的名字") && builtIn.contains("领域：测试"), "Personal context filtering regressed")
             }),
             ("Legacy v2 constants match the pre-iteration defaults", {
                 try check(LegacyPromptsV2.sceneRules(for: .aiInstruction).contains("优先明确任务目标"), "Legacy AI rules drifted")
@@ -665,7 +669,7 @@ private extension AIProcessingRegression {
                 try check(try result?.get() == expected, "Custom Markdown, prefix or Unicode was rewritten")
                 let sent = try body(); let messages = sent["messages"] as! [[String: String]]
                 try check(messages.count == 2 && messages[0]["role"] == "system" && messages[1]["content"] == input, "Transcript mixed into rules")
-                try check(!messages[0]["content"]!.contains(input) && messages[0]["content"]!.contains("共同规则"), "System prompt incorrect")
+                try check(!messages[0]["content"]!.contains(input) && messages[0]["content"] == PromptComposer.enforcingOutputContract(PromptComposer.defaultCustomRules) && !messages[0]["content"]!.contains("共同规则"), "System prompt incorrect")
                 try check(sent["max_tokens"] as? Int == 8192 && sent["temperature"] == nil, "Custom generation uses short-input budget or invalid Kimi temperature")
             }),
             ("Raw snapshot bypasses prompt and key reads; translation still requests AI", {
@@ -704,7 +708,9 @@ private extension AIProcessingRegression {
                 let first = try body(0); let second = try body(1)
                 try check(first["model"] as? String == connection.model && second["model"] as? String == connection.model, "Retry changed model")
                 let prompt = (second["messages"] as! [[String: String]])[0]["content"]!
-                try check(prompt.contains("OLD-BASE") && prompt.contains("OLD-CONTEXT") && !prompt.contains("NEW-CONTEXT") && !prompt.contains("最终输出语言必须是日文"), "Snapshot reread rules/context/language")
+                // 自定义模式的提示词只含用户规则原文和个人背景；冻结语义体现在重试请求与首次完全一致，
+                // 且不读取删除模式后写入的新个人背景和新输出语言。
+                try check(prompt.contains(PromptComposer.defaultCustomRules) && prompt.contains("OLD-CONTEXT") && prompt == ((first["messages"] as! [[String: String]])[0]["content"]!) && !prompt.contains("NEW-CONTEXT") && !prompt.contains("最终输出语言必须是日文"), "Snapshot reread rules/context/language")
                 try check(MockProtocol.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer old-key" }, "Snapshot reread key")
             }),
             ("Automatic finalization freezes once and ignores duplicate or cancelled results", {

@@ -38,6 +38,17 @@ enum PromptComposer {
 
     static func systemPrompt(mode: ModeDefinition, baseRules: String, language: TranslateLanguage,
                              personalContext: String?) -> String {
+        // 自定义模式由用户编写的场景规则决定：不叠加内置基础规则和输出语言，
+        // 个人背景是用户自己填写的内容，继续生效。
+        // 输出契约对所有模式生效：它只约束"不把内部推理和接口元数据混入正文"，
+        // 不改变任务本身，而正文会被直接注入用户窗口，泄漏成本不可接受。
+        if mode.isCustom {
+            var result = mode.sceneRules
+            if let context = personalContext, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                result = AIProcessingService.applyingPersonalContext(context, to: result)
+            }
+            return enforcingOutputContract(result)
+        }
         var result = "# 基础规则\n\(baseRules)\n\n# 当前场景：\(mode.name)\n\(mode.sceneRules)"
         if let context = personalContext, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             result = AIProcessingService.applyingPersonalContext(context, to: result)

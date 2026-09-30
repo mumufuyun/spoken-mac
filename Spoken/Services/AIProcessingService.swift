@@ -140,6 +140,7 @@ final class AIProcessingService: @unchecked Sendable {
                  completion: @escaping (Result<String, Error>) -> Void) {
         if !snapshot.requiresAI { completion(.success(text)); return }
         guard let connection = snapshot.connection else { completion(.failure(MiniMaxError.missingAPIKey)); return }
+        // 输出契约对所有模式生效：快照若是旧版或手动构造的提示词，这里幂等补齐
         submit(text: text, modeID: snapshot.mode.id, isCustom: snapshot.mode.isCustom,
                connection: connection, key: snapshot.apiKey,
                messages: [["role": "system", "content": PromptComposer.enforcingOutputContract(snapshot.systemPrompt)], ["role": "user", "content": text]],
