@@ -32,6 +32,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     static let shared = SpeechService()
     private static let logger = os.Logger(subsystem: "com.moss.spoken", category: "SpeechService")
+    /// 采集看门狗事件同时写入本地日志文件，便于事后确认自愈是否发生
+    private static let unifiedLogger = UnifiedLogger(subsystem: "com.moss.spoken", category: "SpeechService")
 
     private func logInfo(_ msg: String) {
         Self.logger.info("\(msg, privacy: .public)")
@@ -77,6 +79,10 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     /// 这是可恢复的设备就绪问题，不应第一次失败就直接反馈给用户。
     private let audioEngineStartMaxAttempts = 4
     private let audioEngineStartRetryDelays: [TimeInterval] = [0.15, 0.35, 0.8]
+
+    /// 云端采集看门狗的检查间隔：引擎 start 成功不代表 tap 一定会产出音频帧
+    ///（蓝牙输入设备闲置休眠后的首次启动高发），首次检查给足设备激活时间
+    private let cloudCaptureWatchdogDelays: [TimeInterval] = [1.0, 0.8, 0.8]
 
     /// 长时间未录音后，强制重建 AVAudioEngine，避免旧实例在闲置后进入“活死人”状态
     private let audioEngineIdleResetSec: TimeInterval = 300.0
@@ -531,48 +537,11 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             }
         )
 
-        let speechFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                          sampleRate: 16000,
-                                          channels: 1,
-                                          interleaved: true)
-        var tapFormat: AVAudioFormat? = speechFormat
-        var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: tapFormat) { [weak self] buffer, _ in
-            guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
-            guard self.isUsingCloud else { return }
-
-            guard let pcmData = StreamingASRPCMConverter.data(fromCanonicalBuffer: buffer) else { return }
-            let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
-            CloudSpeechService.shared.sendAudio(pcmData)
-            if isFirstAudioFrame {
-                DispatchQueue.main.async(execute: onAudioBuffered)
-            }
-            if self.cloudCaptureBecameReadyAfterAudio(for: sessionID) {
-                DispatchQueue.main.async(execute: onCaptureReady)
-            }
-        }
-
-        if !tapInstalled, speechFormat != nil {
-            logWarn("cloud installTap with 16kHz format failed, converting hardware format explicitly")
-            tapFormat = nil
-            if let converter = StreamingASRPCMConverter(inputFormat: recordingFormat) {
-                tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-                    guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
-                    guard self.isUsingCloud, let pcmData = converter.convert(buffer) else { return }
-                    let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
-                    CloudSpeechService.shared.sendAudio(pcmData)
-                    if isFirstAudioFrame {
-                        DispatchQueue.main.async(execute: onAudioBuffered)
-                    }
-                    if self.cloudCaptureBecameReadyAfterAudio(for: sessionID) {
-                        DispatchQueue.main.async(execute: onCaptureReady)
-                    }
-                }
-            } else {
-                tapInstalled = false
-            }
-        }
-
-        logInfo("Cloud tap installed with format: \(tapFormat == nil ? "hardware native" : "16kHz/mono/Int16"), success: \(tapInstalled)")
+        let tapInstalled = installCloudAudioTap(
+            onAudioBuffered: onAudioBuffered,
+            onCaptureReady: onCaptureReady,
+            sessionID: sessionID
+        )
 
         if !tapInstalled {
             logError("Failed to install cloud tap on audio engine")
@@ -617,7 +586,185 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
         state = .recording
         logInfo("state changed to recording")
+        scheduleCloudCaptureWatchdog(
+            onPartial: onPartial,
+            onFinal: onFinal,
+            onAudioBuffered: onAudioBuffered,
+            onCaptureReady: onCaptureReady,
+            allowFallback: allowFallback,
+            sessionID: sessionID,
+            restartAttempt: 0
+        )
 
+    }
+
+    /// 云端 tap 回调：把音频帧送入云端会话，并在首帧与采集就绪时通知 UI。
+    /// converter 为 nil 表示 tap 已直接产出 16kHz/mono/Int16 的规范格式。
+    private func makeCloudTapBlock(
+        converter: StreamingASRPCMConverter?,
+        onAudioBuffered: @escaping () -> Void,
+        onCaptureReady: @escaping () -> Void,
+        sessionID: UUID
+    ) -> AVAudioNodeTapBlock {
+        return { [weak self] buffer, _ in
+            guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
+            guard self.isUsingCloud else { return }
+
+            let pcmData = converter?.convert(buffer)
+                ?? StreamingASRPCMConverter.data(fromCanonicalBuffer: buffer)
+            guard let pcmData else { return }
+            let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
+            CloudSpeechService.shared.sendAudio(pcmData)
+            if isFirstAudioFrame {
+                DispatchQueue.main.async(execute: onAudioBuffered)
+            }
+            if self.cloudCaptureBecameReadyAfterAudio(for: sessionID) {
+                DispatchQueue.main.async(execute: onCaptureReady)
+            }
+        }
+    }
+
+    /// 安装云端录音 tap：优先 16kHz/mono/Int16，失败时回退硬件原生格式并显式转换。
+    private func installCloudAudioTap(
+        onAudioBuffered: @escaping () -> Void,
+        onCaptureReady: @escaping () -> Void,
+        sessionID: UUID
+    ) -> Bool {
+        let speechFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                          sampleRate: 16000,
+                                          channels: 1,
+                                          interleaved: true)
+        var tapFormat: AVAudioFormat? = speechFormat
+        var tapInstalled = safeInstallTap(
+            onBus: 0,
+            bufferSize: 2048,
+            format: tapFormat,
+            block: makeCloudTapBlock(
+                converter: nil,
+                onAudioBuffered: onAudioBuffered,
+                onCaptureReady: onCaptureReady,
+                sessionID: sessionID
+            )
+        )
+
+        if !tapInstalled, speechFormat != nil {
+            logWarn("cloud installTap with 16kHz format failed, converting hardware format explicitly")
+            tapFormat = nil
+            let recordingFormat = audioEngine.inputNode.outputFormat(forBus: 0)
+            if let converter = StreamingASRPCMConverter(inputFormat: recordingFormat) {
+                tapInstalled = safeInstallTap(
+                    onBus: 0,
+                    bufferSize: 2048,
+                    format: nil,
+                    block: makeCloudTapBlock(
+                        converter: converter,
+                        onAudioBuffered: onAudioBuffered,
+                        onCaptureReady: onCaptureReady,
+                        sessionID: sessionID
+                    )
+                )
+            } else {
+                tapInstalled = false
+            }
+        }
+
+        logInfo("Cloud tap installed with format: \(tapFormat == nil ? "hardware native" : "16kHz/mono/Int16"), success: \(tapInstalled)")
+        return tapInstalled
+    }
+
+    /// 云端采集看门狗：引擎启动成功后若迟迟没有音频帧，说明输入设备未被真正激活
+    ///（蓝牙输入设备闲置休眠后的首次启动高发）。与本地路径的 tap 看门狗一致，
+    /// 此时只重建采集通道，云端会话和已缓冲的音频保持不动。
+    private func scheduleCloudCaptureWatchdog(
+        onPartial: @escaping (String) -> Void,
+        onFinal: @escaping (String) -> Void,
+        onAudioBuffered: @escaping () -> Void,
+        onCaptureReady: @escaping () -> Void,
+        allowFallback: Bool,
+        sessionID: UUID,
+        restartAttempt: Int
+    ) {
+        retryWorkItem?.cancel()
+        let delay = cloudCaptureWatchdogDelays[min(restartAttempt, cloudCaptureWatchdogDelays.count - 1)]
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isActiveSession(sessionID),
+                  self.state == .recording,
+                  self.isUsingCloud,
+                  !self.hasReceivedAudio(for: sessionID) else { return }
+            self.handleCloudCaptureStall(
+                onPartial: onPartial,
+                onFinal: onFinal,
+                onAudioBuffered: onAudioBuffered,
+                onCaptureReady: onCaptureReady,
+                allowFallback: allowFallback,
+                sessionID: sessionID,
+                restartAttempt: restartAttempt
+            )
+        }
+        retryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func handleCloudCaptureStall(
+        onPartial: @escaping (String) -> Void,
+        onFinal: @escaping (String) -> Void,
+        onAudioBuffered: @escaping () -> Void,
+        onCaptureReady: @escaping () -> Void,
+        allowFallback: Bool,
+        sessionID: UUID,
+        restartAttempt: Int
+    ) {
+        let nextAttempt = restartAttempt + 1
+        guard nextAttempt < audioEngineStartMaxAttempts else {
+            Self.unifiedLogger.error("cloud audio capture delivered no frames after \(audioEngineStartMaxAttempts) attempts")
+            CloudSpeechService.shared.disconnect()
+            if allowFallback {
+                logInfo("auto fallback to local")
+                cleanupResources()
+                currentProvider = .local
+                installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
+            } else {
+                failStart("麦克风未就绪，请重试", sessionID: sessionID)
+            }
+            return
+        }
+
+        Self.unifiedLogger.warning("cloud audio capture silent after engine start; rebuilding capture channel (attempt \(nextAttempt + 1)/\(audioEngineStartMaxAttempts))")
+        safeRemoveTap(onBus: 0)
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+        rebuildAudioEngine()
+        resetAudioReceived(for: sessionID)
+
+        let tapInstalled = installCloudAudioTap(
+            onAudioBuffered: onAudioBuffered,
+            onCaptureReady: onCaptureReady,
+            sessionID: sessionID
+        )
+        if tapInstalled {
+            audioEngine.prepare()
+            do {
+                try audioEngine.start()
+                logInfo("audioEngine restarted after silent capture")
+                PipelineLatencyMetrics.shared.mark(.audioEngineStarted)
+            } catch {
+                Self.unifiedLogger.error("audio engine restart after silent capture failed: \(error.localizedDescription)")
+                safeRemoveTap(onBus: 0)
+            }
+        }
+        // 无论本次重建是否成功，都由下一次看门狗确认是否有帧；
+        // 仍然无帧时自动进入下一次重建，直到耗尽次数
+        scheduleCloudCaptureWatchdog(
+            onPartial: onPartial,
+            onFinal: onFinal,
+            onAudioBuffered: onAudioBuffered,
+            onCaptureReady: onCaptureReady,
+            allowFallback: allowFallback,
+            sessionID: sessionID,
+            restartAttempt: nextAttempt
+        )
     }
 
     /// 重新建立云端逻辑会话前先彻底替换音频引擎，避免复用处于失败状态的 inputNode。
