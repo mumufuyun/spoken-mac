@@ -55,6 +55,22 @@ final class SecureKeyStorage: ConnectionKeyStore, @unchecked Sendable {
         }
     }
     
+    func readASRCredential(_ id: String) throws -> String? {
+        try readChecked(account: "speech_connection_\(id)")
+    }
+    func writeASRCredential(_ value: String, id: String) throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: "speech_connection_\(id)",
+            kSecValueData as String: Data(value.utf8), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw ConfigurationError.unavailable("语音密钥未保存（\(status)）") }
+    }
+    func removeASRCredential(_ id: String) throws {
+        let status = SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: "speech_connection_\(id)"] as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw ConfigurationError.unavailable("语音密钥未删除（\(status)）") }
+    }
+
     /// 读取 LLM API Key（先读新 account，兼容旧 account）
     func readAPIKey() -> String? {
         // 先尝试读取新的 account
@@ -69,8 +85,19 @@ final class SecureKeyStorage: ConnectionKeyStore, @unchecked Sendable {
     }
     
     /// 读取语音识别 API Key。密钥只保存在 Keychain。
-    func readSpeechCredential() throws -> String? {
-        try readChecked(account: speechAccount)
+    func readSpeechCredential(allowInteraction: Bool = true) throws -> String? {
+        if allowInteraction { return try readChecked(account: speechAccount) }
+        // Legacy file-based keychain ignores the data-protection query UI policy.
+        // Migration runs on the main thread before other credential work. Scope the
+        // process-local interaction policy to this read and always restore it.
+        precondition(Thread.isMainThread)
+        var previouslyAllowed = DarwinBoolean(false)
+        let readStatus = SecKeychainGetUserInteractionAllowed(&previouslyAllowed)
+        guard readStatus == errSecSuccess, SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            throw ConfigurationError.unavailable("请在语音识别设置中重试读取旧配置与密钥")
+        }
+        defer { SecKeychainSetUserInteractionAllowed(previouslyAllowed.boolValue) }
+        return try readChecked(account: speechAccount)
     }
 
     func readSpeechAPIKey() -> String? {

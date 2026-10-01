@@ -371,6 +371,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let targetApp = appFromViewModel ?? strongSelf.frontmostAppBeforeHotKey
             strongSelf.performTextInjection(text: text, targetApp: targetApp)
         }
+        viewModel.onRecognitionFailure = { [weak self] message in self?.showProcessingNotice(message) }
 
         self.recordingViewModel = viewModel
         self.recordingPanel = panel
@@ -604,6 +605,7 @@ class RecordingViewModel: ObservableObject {
     @Published var displayStatus = "录音"
     @Published var isCancelled = false
     private(set) var fallbackNotice: String?
+    private var recognitionFailure: String?
     private var frontmostApp: NSRunningApplication?
     var targetApplication: NSRunningApplication?
     private var lastRecognizedText = ""
@@ -652,6 +654,7 @@ class RecordingViewModel: ObservableObject {
     var onClose: (() -> Void)?
     var onComplete: ((String, NSRunningApplication?) -> Void)?
     var onCancel: (() -> Void)?
+    var onRecognitionFailure: ((String) -> Void)?
 
     func startRecording() {
         frontmostApp = targetApplication ?? NSWorkspace.shared.frontmostApplication
@@ -664,6 +667,7 @@ class RecordingViewModel: ObservableObject {
         isAudioBuffered = false
         isProcessing = false
         fallbackNotice = nil
+        recognitionFailure = nil
         partialText = ""
         lastRecognizedText = ""
         statusText = "正在准备麦克风，请稍候…"
@@ -695,17 +699,9 @@ class RecordingViewModel: ObservableObject {
         }
 
         SpeechService.shared.onCloudConnectionFailed = { [weak self] reason in
-            DispatchQueue.main.async {
-                guard let self = self, self.isRecording else { return }
-                // 云端连接失败时，在状态文本中提示用户
-                if self.isCloudRecognizing && self.partialText.isEmpty {
-                    let raw = UserDefaults.standard.string(forKey: "speechRecognitionProvider")
-                    let provider = SpeechRecognitionProvider(rawValue: raw ?? "") ?? .local
-                    self.statusText = provider == .auto
-                        ? "云端连接失败，已切换本地识别"
-                        : "云端连接失败，请重试"
-                }
-            }
+            // SpeechService delivers this on main, before its final callback. Do not queue
+            // it again, otherwise an incomplete transcript could enter AI processing first.
+            self?.handleCloudRecognitionFailure(reason)
         }
 
         let started = SpeechService.shared.startRecording(
@@ -762,6 +758,7 @@ class RecordingViewModel: ObservableObject {
                     self.isProcessing = false
                     self.statusText = reason
                     self.stateManager.transition(to: .idle)
+                    self.onRecognitionFailure?(reason)
                     self.onCancel?()
                 }
             }
@@ -819,9 +816,19 @@ class RecordingViewModel: ObservableObject {
         hasSubmitted = true
         guard !text.isEmpty else {
             isProcessing = false
+            if let recognitionFailure {
+                statusText = "语音识别失败：" + recognitionFailure
+                onRecognitionFailure?(statusText)
+            }
             stateManager.transition(to: .idle)
             PipelineLatencyMetrics.shared.abandon()
             onCancel?()
+            return
+        }
+        if recognitionFailure != nil {
+            isProcessing = false
+            fallbackNotice = "云端识别未完整结束，已保留已识别文字，请核对是否有遗漏。"
+            onComplete?(text, frontmostApp)
             return
         }
         freezeConfiguration()
@@ -832,6 +839,18 @@ class RecordingViewModel: ObservableObject {
             processor.process(text: text, snapshot: snapshot) { [weak self] result in
                 DispatchQueue.main.async { self?.finishAIProcessing(result, originalText: text) }
             }
+        }
+    }
+
+    func handleCloudRecognitionFailure(_ reason: String) {
+        guard !isCancelled, !hasSubmitted else { return }
+        if !isRecording && isProcessing {
+            recognitionFailure = reason
+            statusText = "云端识别未完成，正在保留已有文字…"
+        } else if isRecording && isCloudRecognizing && partialText.isEmpty {
+            let raw = UserDefaults.standard.string(forKey: "speechRecognitionProvider")
+            let provider = SpeechRecognitionProvider(rawValue: raw ?? "") ?? .local
+            statusText = provider == .auto ? "云端连接失败，正在尝试本地识别" : "云端连接失败，请重试"
         }
     }
 

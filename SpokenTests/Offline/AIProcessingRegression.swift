@@ -140,6 +140,13 @@ private final class MemoryKeys: ConnectionKeyStore {
     var failRead = false
     var failWrite = false
     var reads = 0
+    var legacyRequiresInteraction = false
+    var noninteractiveLegacyReads = 0
+    func readLegacyCredentialWithoutUI() throws -> String? {
+        noninteractiveLegacyReads += 1
+        if legacyRequiresInteraction { throw TestFailure(description: "Interaction required") }
+        return try readLegacyCredential()
+    }
     func readCredential(_ id: String) throws -> String? {
         reads += 1
         if failRead { throw TestFailure(description: "Keychain locked") }
@@ -177,9 +184,10 @@ private final class ConfigurationFixture {
     lazy var modes = ModeStore(defaults: defaults, file: file("modes"), backupFile: file("backup"))
     lazy var connections = ModelConnectionStore(defaults: defaults, file: file("connections"), keys: keys)
     init(_ values: [String: Any] = [:]) { defaults = MemoryDefaults(values) }
+    lazy var speechConnections = SpeechConnectionStore(file: file("speech-connections"), keys: keys, defaults: defaults)
     var speechSettings: SpeechSettingsDependencies {
-        SpeechSettingsDependencies(defaults: defaults, readKey: { "synthetic-speech-key" }, saveKey: { _ in true },
-            refreshConnection: { _ in }, providers: { [("qwen-realtime", "千问实时识别"), ("dashscope", "阿里云 FunASR")] },
+        SpeechSettingsDependencies(defaults: defaults, store: speechConnections,
+            refreshConnection: { _ in }, isBusy: { false },
             metrics: { ASRMetricsSnapshot(sessions: 0, connected: 0, successes: 0, failures: 0, reconnects: 0, fallbacks: 0) }, latency: { [:] })
     }
     func file(_ name: String) -> ConfigurationFile {
@@ -387,7 +395,7 @@ private struct AIProcessingRegression {
                 vm.finishAIProcessing(.success("迟到正文"), originalText: input)
                 try check(outputs.count == count, "Cancelled ViewModel emitted text")
             })
-        ] + configurationTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests()
+        ] + configurationTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests()
         var failures = 0
         for (name, test) in tests {
             do { try test(); print("PASS: \(name)") }
@@ -950,7 +958,7 @@ private extension AIProcessingRegression {
                 let f = ConfigurationFixture()
                 let transport = Fixture()
                 let service = transport.service()
-                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults)
+                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, speechConnections: f.speechConnections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults)
                 let settings = SettingsView(modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults,
                     speechDependencies: f.speechSettings, connectionTestService: service)
                 let vm = RecordingViewModel(snapshotProvider: { try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults) },
@@ -1180,6 +1188,7 @@ private extension AIProcessingRegression {
     @MainActor
     static func renderInterfaceSamples(at directory: URL) throws {
         // Only synthetic configuration and in-memory keys. Never instantiate the real AppDelegate.
+        StateManager.shared.transition(to: .idle)
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         app.finishLaunching()
@@ -1196,6 +1205,14 @@ private extension AIProcessingRegression {
             _ = try fixture.connections.save(.preset(provider), key: "synthetic-preview-key")
         }
         try fixture.connections.select(fixture.connections.connections.last!.id)
+        for vendor in SpeechVendor.allCases {
+            var sample = speechSample(vendor)
+            if vendor == .custom {
+                var c = sample.connection; c.name = "一个特别长的自定义语音连接名称用于检查布局"
+                sample = SpeechSessionSnapshot(connection: c, credentials: sample.credentials)
+            }
+            try fixture.speechConnections.save(sample.connection, credentials: sample.credentials, engine: .cloud)
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         func render<V: View>(_ view: V, name: String, size: NSSize, dark: Bool) throws {
@@ -1217,7 +1234,7 @@ private extension AIProcessingRegression {
         }
         for dark in [false, true] {
             let theme = dark ? "dark" : "light"
-            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
+            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
                        name: "menu-\(theme)", size: NSSize(width: 380, height: 480), dark: dark)
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .modes, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "modes-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
@@ -1227,7 +1244,7 @@ private extension AIProcessingRegression {
                                     initialSection: .shortcuts, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "shortcuts-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
             fixture.hotkeyRegistrar.occupied.insert(fixture.hotkeys.configuration); fixture.hotkeys.recheck()
-            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
                                    hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
                        name: "menu-conflict-\(theme)", size: NSSize(width: 380, height: 480), dark: dark)
             fixture.hotkeyRegistrar.occupied.removeAll(); fixture.hotkeys.recheck()
@@ -1235,6 +1252,12 @@ private extension AIProcessingRegression {
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .speech,
                                     defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "speech-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
+            for connection in fixture.speechConnections.connections {
+                try fixture.speechConnections.select(connection.id, engine: .cloud)
+                try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
+                                        initialSection: .speech, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+                           name: "speech-\(connection.vendor.rawValue)-minimum-\(theme)", size: NSSize(width: 820, height: 580), dark: dark)
+            }
             fixture.defaults.set("领域：合成测试。表达习惯：简洁直接。", forKey: PersonalContextStore.contextKey)
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .context,
                                     defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
@@ -1243,9 +1266,9 @@ private extension AIProcessingRegression {
             try render(AccessibilityGuideView(service: fixture.accessibility, onLater: {}), name: "permission-guide-\(theme)",
                        size: NSSize(width: 480, height: 580), dark: dark)
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
-                                    initialSection: .permissions, defaults: fixture.defaults), name: "permissions-minimum-\(theme)",
+                                    initialSection: .permissions, defaults: fixture.defaults, speechDependencies: fixture.speechSettings), name: "permissions-minimum-\(theme)",
                        size: NSSize(width: 820, height: 580), dark: dark)
-            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+            try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
                                    hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, panelHeight: 300),
                        name: "menu-permissions-minimum-\(theme)", size: NSSize(width: 380, height: 300), dark: dark)
             try render(TextDeliveryNotice(message: "文字已复制。辅助功能尚未授权或生效，请回到输入框按 ⌘V 粘贴。", onAuthorize: {}, onDismiss: {}),
@@ -1257,18 +1280,18 @@ private extension AIProcessingRegression {
                        size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
             fixture.permissionState = .ready; fixture.accessibility.refresh()
         }
-        try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+        try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
                                hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, panelHeight: 300),
                    name: "menu-minimum", size: NSSize(width: 380, height: 300), dark: false)
         fixture.hotkeyRegistrar.occupied.insert(fixture.hotkeys.configuration); fixture.hotkeys.recheck()
-        try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+        try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
                                hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, panelHeight: 300),
                    name: "menu-conflict-minimum", size: NSSize(width: 380, height: 300), dark: true)
         fixture.hotkeyRegistrar.occupied.removeAll(); fixture.hotkeys.recheck()
-        try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults), name: "settings-minimum",
+        try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults, speechDependencies: fixture.speechSettings), name: "settings-minimum",
                    size: NSSize(width: 820, height: 580), dark: false)
         try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
-                                initialSection: .shortcuts, defaults: fixture.defaults), name: "shortcuts-minimum",
+                                initialSection: .shortcuts, defaults: fixture.defaults, speechDependencies: fixture.speechSettings), name: "shortcuts-minimum",
                    size: NSSize(width: 820, height: 580), dark: false)
         if let frontmost, let after = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             try check(after == frontmost, "Preview panels stole foreground application focus")
@@ -1297,13 +1320,9 @@ private struct InteractiveSmokeView: View {
     @State private var failSpeechKeyRead = false
 
     private var speechDependencies: SpeechSettingsDependencies {
-        var value = fixture.speechSettings
-        value.readKey = {
-            if failSpeechKeyRead { throw ConfigurationError.unavailable("合成测试：钥匙串暂不可读") }
-            return "synthetic-speech-key"
-        }
-        value.saveKey = { _ in !failWrites }
-        return value
+        fixture.keys.failRead = failSpeechKeyRead
+        fixture.keys.failWrite = failWrites
+        return fixture.speechSettings
     }
 
     var body: some View {
@@ -1333,7 +1352,7 @@ private struct InteractiveSmokeView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if showMenu {
                 ContentView(onOpenSettings: { section in settingsSection = section; showMenu = false },
-                            modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults)
+                            modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: settingsSection,
@@ -1846,8 +1865,8 @@ private extension AIProcessingRegression {
             }),
             ("Accessibility: all view roots use injected status without touching TCC", {
                 let f = ConfigurationFixture(); f.permissionState = .notAuthorized
-                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults)
-                let settings = SettingsView(modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, initialSection: .permissions, defaults: f.defaults)
+                let menu = ContentView(onOpenSettings: { _ in }, modes: f.modes, connections: f.connections, speechConnections: f.speechConnections, hotkeys: f.hotkeys, accessibility: f.accessibility, defaults: f.defaults)
+                let settings = SettingsView(modes: f.modes, connections: f.connections, hotkeys: f.hotkeys, accessibility: f.accessibility, initialSection: .permissions, defaults: f.defaults, speechDependencies: f.speechSettings)
                 let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "Unused") }, modeNameProvider: { "测试" }, stopCapture: {}, cancelCapture: {})
                 let panel = RecordingPanelView(viewModel: vm, modes: f.modes, hotkeys: f.hotkeys, accessibility: f.accessibility)
                 try check(menu.accessibility === f.accessibility && settings.accessibility === f.accessibility && panel.accessibility === f.accessibility, "Permission singleton leaked into fake UI")
@@ -1910,4 +1929,436 @@ private extension AIProcessingRegression {
             })
         ]
     }
+}
+
+private final class FakeSpeechSocket: SpeechSocket {
+    private let lock = NSLock()
+    private var received: ((Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+    private var backlog: [URLSessionWebSocketTask.Message] = []
+    private var frames: [URLSessionWebSocketTask.Message] = []
+    private(set) var request: URLRequest?
+    private(set) var closed = false
+    var openFailure = false
+    var sendFailure = false
+    var onSend: ((URLSessionWebSocketTask.Message) -> Void)?
+    var messages: [URLSessionWebSocketTask.Message] { lock.lock(); defer { lock.unlock() }; return frames }
+    func open(_ request: URLRequest, completion: @escaping (Result<Void, Error>) -> Void) {
+        self.request = request; closed = false
+        completion(openFailure ? .failure(CloudSpeechError.connectionFailed) : .success(()))
+    }
+    func send(_ message: URLSessionWebSocketTask.Message, completion: @escaping (Error?) -> Void) {
+        lock.lock(); frames.append(message); lock.unlock()
+        completion(sendFailure ? CloudSpeechError.connectionFailed : nil)
+        onSend?(message)
+    }
+    func receive(_ completion: @escaping (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
+        lock.lock()
+        if backlog.isEmpty { received = completion; lock.unlock() }
+        else { let message = backlog.removeFirst(); lock.unlock(); completion(.success(message)) }
+    }
+    func emit(_ message: URLSessionWebSocketTask.Message) {
+        lock.lock()
+        if let callback = received { received = nil; lock.unlock(); callback(.success(message)) }
+        else { backlog.append(message); lock.unlock() }
+    }
+    func close() { lock.lock(); closed = true; lock.unlock() }
+}
+
+private final class FakeCloudSpeechProvider: CloudSpeechProvider {
+    let providerId: String
+    let displayName = "synthetic ASR"
+    var connectionState: CloudConnectionState = .idle
+    var onConnectionStateChanged: ((CloudConnectionState) -> Void)?
+    var isReady: Bool { connectionState == .connected }
+    var partial: ((String) -> Void)?
+    var final: ((String) -> Void)?
+    var error: ((Error) -> Void)?
+    var preconnectCount = 0
+    var disconnected = false
+    init(_ id: String) { providerId = id }
+    func connect(apiKey: String?, model: String, onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
+        partial = onPartial; final = onFinal; error = onError; connectionState = .connected; onConnectionStateChanged?(.connected)
+    }
+    func sendAudio(_ data: Data) {}
+    func finish(completion: @escaping (String?) -> Void) { completion("synthetic final") }
+    func disconnect() { disconnected = true }
+    func preconnect() { preconnectCount += 1 }
+    func cancelPreconnect() {}
+}
+
+extension AIProcessingRegression {
+    static func speechSample(_ vendor: SpeechVendor = .qwen) -> SpeechSessionSnapshot {
+        var c = SpeechConnection.preset(vendor)
+        if vendor == .iflytek { c.appID = "test-app" }
+        if vendor == .custom { c.endpoint = "https://asr.example.test/audio/transcriptions"; c.model = "whisper-compatible" }
+        return SpeechSessionSnapshot(connection: c, credentials: SpeechCredentials(apiKey: "test-key", apiSecret: vendor == .iflytek ? "test-secret" : ""))
+    }
+    static func speechMessage(_ object: [String: Any]) throws -> URLSessionWebSocketTask.Message {
+        .string(String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self))
+    }
+    static func iflyResult(_ id: Int, text: String, stable: Bool = false, final: Bool = false) throws -> URLSessionWebSocketTask.Message {
+        try speechMessage(["msg_type": "result", "res_type": "asr", "data": ["seg_id": id, "ls": final,
+            "cn": ["st": ["type": stable ? "0" : "1", "rt": [["ws": [["cw": [["w": text]]]]]]]]]])
+    }
+    static func volcResult(_ text: String, final: Bool = false) throws -> URLSessionWebSocketTask.Message {
+        .data(SpeechWireProtocol.volcFrame(type: 9, flags: final ? 2 : 0, serialization: 1,
+            payload: try JSONSerialization.data(withJSONObject: ["result": ["text": text]])))
+    }
+    @MainActor
+    static func speechProviderTests() -> [(String, () throws -> Void)] {
+        [
+            ("ASR: legacy migration preserves model, workspace, engine and isolated credential once", {
+                let f = ConfigurationFixture(["cloud_speech_provider": "qwen-realtime", "speech_model_name": "existing-model", "speech_workspace_id": "workspace-123", "speechRecognitionProvider": SpeechRecognitionProvider.auto.rawValue])
+                f.keys.legacy = "legacy-speech-key"
+                let store = f.speechConnections
+                let first = try store.snapshot()
+                try check(first.connection.model == "existing-model" && first.connection.endpoint.contains("workspace-123.cn-beijing.maas.aliyuncs.com"), "Legacy endpoint or model reset")
+                try check(store.engine == .auto && first.credentials.apiKey == "legacy-speech-key", "Legacy key or engine lost")
+                let ids = Set(f.keys.values.keys); store.reload()
+                try check(Set(f.keys.values.keys) == ids && store.active?.id == first.connection.id, "Migration ran twice")
+                let disk = try String(contentsOf: f.file("speech-connections").url, encoding: .utf8)
+                try check(!disk.contains("legacy-speech-key") && !disk.contains("apiSecret"), "Secret written into JSON")
+            }),
+            ("ASR: failed migration leaves legacy settings and no staged key", {
+                let f = ConfigurationFixture(["speech_model_name": "old-model"]); f.keys.legacy = "old-key"; f.failingFiles.insert("speech-connections")
+                try check(f.speechConnections.loadError != nil && f.keys.values.isEmpty, "Migration failure leaked staged credential")
+                try check(f.defaults.string(forKey: "speech_model_name") == "old-model" && f.keys.legacy == "old-key", "Legacy was overwritten")
+                f.failingFiles.removeAll(); f.speechConnections.reload()
+                try check(f.speechConnections.active?.model == "old-model", "Recovery failed")
+            }),
+            ("ASR: launch never prompts for legacy credentials and explicit retry completes migration", {
+                let f = ConfigurationFixture(["speech_model_name": "old-model"])
+                f.keys.legacy = "private-legacy"; f.keys.legacyRequiresInteraction = true
+                let store = f.speechConnections
+                try check(store.loadError != nil && f.keys.reads == 0 && f.keys.noninteractiveLegacyReads == 1, "Startup attempted interactive credential access")
+                try check(!FileManager.default.fileExists(atPath: f.file("speech-connections").url.path) && f.keys.values.isEmpty, "Blocked migration changed saved state")
+                store.reload(allowCredentialPrompt: true)
+                try check(store.loadError == nil && (try store.snapshot()).credentials.apiKey == "private-legacy", "Explicit migration retry lost legacy key")
+                let reads = f.keys.reads; store.reload()
+                try check(f.keys.reads == reads, "Completed migration read legacy key again")
+            }),
+            ("ASR: denied migration retry keeps old settings and remains retryable", {
+                let f = ConfigurationFixture(["speech_model_name": "old-model"])
+                f.keys.legacy = "private-legacy"; f.keys.failRead = true
+                let store = f.speechConnections; store.reload(allowCredentialPrompt: true)
+                try check(store.loadError != nil && store.active == nil && f.keys.values.isEmpty, "Denied migration published partial configuration")
+                try check(f.keys.legacy == "private-legacy" && f.defaults.string(forKey: "speech_model_name") == "old-model", "Denied migration changed legacy settings")
+                f.keys.failRead = false; store.reload(allowCredentialPrompt: true)
+                try check(store.loadError == nil && store.active?.model == "old-model", "Retry did not recover")
+            }),
+            ("ASR: multiple connections, duplicate name rejection and restart restoration", {
+                let f = ConfigurationFixture(); let s = f.speechConnections; var one = speechSample(.qwen).connection
+                one.name = "Qwen 1"; let saved = try s.save(one, credentials: SpeechCredentials(apiKey: "one"), engine: .cloud)
+                var two = SpeechConnection.preset(.qwen); two.name = "Qwen 2"
+                let saved2 = try s.save(two, credentials: SpeechCredentials(apiKey: "two"), engine: .auto)
+                try check(saved.credentialID != saved2.credentialID, "Keys shared")
+                try check(try s.credentials(for: saved).apiKey == "one", "First key overwritten")
+                two.id = UUID().uuidString
+                do { _ = try s.save(two, credentials: SpeechCredentials(apiKey: "bad"), engine: .cloud); throw TestFailure(description: "Duplicate accepted") }
+                catch is ConfigurationError {}
+                s.reload(); try check(s.connections.count == 2 && s.active?.id == saved2.id && s.engine == .auto, "Restart lost state")
+            }),
+            ("ASR: key and file save failures retain selected connection and valid key", {
+                let f = ConfigurationFixture(); let s = f.speechConnections; let sample = speechSample()
+                let old = try s.save(sample.connection, credentials: sample.credentials, engine: .cloud)
+                let initial = s.configuration; let keys = f.keys.values
+                f.failingFiles.insert("speech-connections")
+                var failed = false
+                do { _ = try s.save(old, credentials: SpeechCredentials(apiKey: "replacement"), engine: .auto) } catch { failed = true }
+                try check(failed, "Save should fail")
+                try check(s.configuration == initial && f.keys.values == keys, "File failure overwrote valid settings")
+                f.failingFiles.removeAll(); f.keys.failWrite = true
+                do { _ = try s.save(old, credentials: SpeechCredentials(apiKey: "replacement"), engine: .auto) } catch {}
+                try check(s.configuration == initial && f.keys.values == keys, "Key failure overwrote valid settings")
+            }),
+            ("ASR: delete selected connection returns to local without borrowing another key", {
+                let f = ConfigurationFixture(); let s = f.speechConnections; let a = speechSample(), b = speechSample(.volcengine)
+                let first = try s.save(a.connection, credentials: a.credentials, engine: .cloud)
+                let second = try s.save(b.connection, credentials: SpeechCredentials(apiKey: "other"), engine: .cloud)
+                let frozen = try s.snapshot(); try s.delete(second.id)
+                try check(s.engine == .local && s.active == nil && s.connections.count == 1, "Delete silently selected a different cloud")
+                try check(frozen.credentials.apiKey == "other" && (try s.credentials(for: first)).apiKey == "test-key", "Frozen or unrelated key corrupted")
+            }),
+            ("ASR: protocol validation rejects credential URLs and incompatible preset protocols", {
+                for endpoint in ["http://example.com/audio", "wss://key:secret@example.com/ws", "wss://example.com/ws?token=secret", "wss://example.com/ws#fragment"] {
+                    var c = speechSample().connection; c.endpoint = endpoint
+                    do { try SpeechConnectionStore.validate(c); throw TestFailure(description: "Unsafe URL accepted") } catch is ConfigurationError {}
+                }
+                var c = speechSample(.volcengine).connection; c.api = .qwenRealtime
+                do { try SpeechConnectionStore.validate(c); throw TestFailure(description: "Mismatched protocol") } catch is ConfigurationError {}
+                var custom = speechSample(.custom).connection; custom.api = .iflytekRealtime
+                custom.endpoint = SpeechAPI.iflytekRealtime.endpoint; custom.appID = "test"; custom.language = "autodialect"
+                try SpeechConnectionStore.validate(custom, credentials: SpeechCredentials(apiKey: "key", apiSecret: "secret"))
+            }),
+            ("ASR: editor clears secrets when changing protocol and blocks busy saves", {
+                let f = ConfigurationFixture(); var deps = f.speechSettings
+                deps.isBusy = { true }; let editor = SpeechConnectionEditor(deps); editor.create(.custom)
+                editor.credentials = SpeechCredentials(apiKey: "one", apiSecret: "secret")
+                editor.changeAPI(.iflytekRealtime)
+                try check(editor.credentials == SpeechCredentials() && editor.draft.credentialID == nil, "Credentials crossed protocols")
+                do { try editor.save(); throw TestFailure(description: "Busy edit saved") } catch is ConfigurationError {}
+                try check(f.speechConnections.connections.isEmpty, "Busy edit persisted")
+            }),
+            ("ASR: Qwen custom endpoint preserves path/port and replaces model exactly once", {
+                var c = speechSample().connection; c.endpoint = "wss://example.test:9443/custom/realtime?model=old&region=test"; c.model = "new model"
+                let url = ReliableQwenSpeechProvider.configuredURL(c)!
+                let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+                try check(parts.port == 9443 && parts.path == "/custom/realtime" && parts.queryItems?.filter { $0.name == "model" }.count == 1, "Endpoint rewritten")
+                try check(parts.queryItems?.first { $0.name == "model" }?.value == "new model", "Wrong model")
+            }),
+            ("ASR: iFLYTEK signature matches independent HMAC fixture", {
+                let now = ISO8601DateFormatter().date(from: "2026-10-02T00:00:00Z")!
+                let request = try SpeechWireProtocol(speechSample(.iflytek)).request(now: now, requestID: "test-session")
+                let values = Dictionary(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value!) }, uniquingKeysWith: { _, b in b })
+                try check(values["signature"] == "1UJE9yLGyvPeCwAz2U9f/Lhj+3s=", "Signature mismatch")
+                try check(values["utc"] == "2026-10-02T00:00:00+0000" && values["accessKeyId"] == "test-key" && values["audio_encode"] == "pcm_s16le", "Wrong auth/audio parameters")
+                try check(!request.url!.absoluteString.contains("test-secret"), "Secret placed in URL")
+            }),
+            ("ASR: iFLYTEK corrections replace segments, stable text resists delayed partials", {
+                var wire = SpeechWireProtocol(speechSample(.iflytek))
+                _ = try wire.parse(iflyResult(0, text: "错字")); _ = try wire.parse(iflyResult(0, text: "正确", stable: true))
+                _ = try wire.parse(iflyResult(0, text: "旧的部分"))
+                let end = try wire.parse(iflyResult(1, text: "正文", stable: true, final: true))
+                try check(end.text == "正确正文" && end.final, "Duplicate or stale transcript")
+                let ready = try wire.parse(speechMessage(["msg_type": "action", "data": ["sessionId": "test-session"]]))
+                try check(ready.ready && ready.sessionID == "test-session", "Handshake not recognized")
+            }),
+            ("ASR: provider error content is not surfaced as transcript or raw metadata", {
+                var wire = SpeechWireProtocol(speechSample(.iflytek))
+                do { _ = try wire.parse(speechMessage(["action": "error", "code": "35001", "desc": "private-secret-or-text"])); throw TestFailure(description: "Error accepted") }
+                catch let error as CloudSpeechError { try check(!error.localizedDescription.contains("private-secret-or-text"), "Raw response leaked") }
+            }),
+            ("ASR: Doubao headers and binary frames follow chosen protocol", {
+                let wire = SpeechWireProtocol(speechSample(.volcengine)); let request = try wire.request(requestID: "synthetic-request")
+                try check(request.value(forHTTPHeaderField: "X-Api-Key") == "test-key" && request.value(forHTTPHeaderField: "X-Api-Resource-Id") == "volc.seedasr.sauc.duration", "Wrong credentials/resource")
+                if case .data(let data) = try wire.initialFrame()! {
+                    try check(Array(data.prefix(4)) == [0x11,0x10,0x10,0], "Wrong header")
+                    let body = try JSONSerialization.jsonObject(with: data.dropFirst(8)) as! [String: Any]
+                    try check((body["audio"] as? [String: Any])?["rate"] as? Int == 16000, "Wrong rate")
+                } else { throw TestFailure(description: "Missing binary initial frame") }
+                if case .data(let end) = try wire.endFrame(sessionID: "") { try check(Array(end) == [0x11,0x22,0,0,0,0,0,0], "Wrong end marker") }
+            }),
+            ("ASR: Doubao full hypotheses replace and malformed frames fail", {
+                var wire = SpeechWireProtocol(speechSample(.volcengine))
+                _ = try wire.parse(volcResult("部分"))
+                let final = try wire.parse(volcResult("完整正文", final: true)); try check(final.text == "完整正文" && final.final, "Not full hypothesis")
+                for malformed in [Data(), Data([0x11,0x90,0x10,0,0,0,0,9]), Data([0x11,0x90,0x11,0,0,0,0,0])] {
+                    do { _ = try wire.parse(.data(malformed)); throw TestFailure(description: "Malformed accepted") } catch is CloudSpeechError {}
+                }
+            }),
+            ("ASR: streaming buffers before handshake, paces frames and sends end last", {
+                let socket = FakeSpeechSocket(); let provider = StreamingSpeechProvider(snapshot: speechSample(.iflytek), makeSocket: { socket })
+                var partial = "", result: String?, errors = 0
+                provider.connect(apiKey: nil, model: "", onPartial: { partial = $0 }, onFinal: { _ in }, onError: { _ in errors += 1 })
+                provider.sendAudio(Data(repeating: 0, count: 2560))
+                spin(0.08); try check(socket.messages.isEmpty, "Audio sent before service handshake")
+                socket.onSend = { message in if case .string = message { socket.emit(try! iflyResult(0, text: "合成识别", stable: true, final: true)) } }
+                socket.emit(try speechMessage(["msg_type": "action", "data": ["sessionId": "sid"]]))
+                spin(0.2, until: { provider.isReady })
+                provider.finish { result = $0 }
+                spin(1, until: { result != nil })
+                try check(result == "合成识别" && partial == "合成识别" && errors == 0, "Final callback failed")
+                let messages = socket.messages; try check(messages.count == 3, "Wrong audio/end frame count")
+                if case .string(let end) = messages.last! { try check(end.contains("sid") && end.contains("end"), "Missing session end") } else { throw TestFailure(description: "End frame missing") }
+                provider.disconnect()
+            }),
+            ("ASR: Doubao drains PCM frames before final marker and delivers one final", {
+                let socket = FakeSpeechSocket(), sample = speechSample(.volcengine)
+                let provider = StreamingSpeechProvider(snapshot: sample, makeSocket: { socket })
+                var result: String?, errors = 0, finals = 0
+                socket.onSend = { message in
+                    if case .data(let data) = message, data.count >= 8, data[1] == 0x22 {
+                        socket.emit(try! volcResult("完整合成识别", final: true))
+                    }
+                }
+                provider.connect(apiKey: nil, model: "", onPartial: { _ in }, onFinal: { _ in finals += 1 }, onError: { _ in errors += 1 })
+                provider.sendAudio(Data(repeating: 7, count: 12800)); provider.finish { result = $0 }
+                spin(1.5, until: { result != nil || errors > 0 })
+                let frames = socket.messages.compactMap { message -> Data? in if case .data(let data) = message { return data }; return nil }
+                try check(frames.count == 4 && frames.first?[1] == 0x10 && frames.last?[1] == 0x22, "Initial/audio/end order wrong")
+                try check(frames.dropFirst().dropLast().reduce(0) { $0 + $1.count - 8 } == 12800, "PCM was dropped")
+                try check(result == "完整合成识别" && errors == 0 && finals == 1 && !provider.isReady, "Final or closed state wrong")
+                provider.disconnect()
+            }),
+            ("ASR: early final while stopping cannot silently discard buffered audio", {
+                let socket = FakeSpeechSocket(), sample = speechSample(.iflytek)
+                let provider = StreamingSpeechProvider(snapshot: sample, makeSocket: { socket })
+                var failures = 0, finals = 0, completions = 0
+                provider.connect(apiKey: nil, model: "", onPartial: { _ in }, onFinal: { _ in finals += 1 }, onError: { _ in failures += 1 })
+                provider.sendAudio(Data(repeating: 0, count: 32000))
+                provider.finish { if $0 == nil { completions += 1 } }
+                socket.emit(try speechMessage(["msg_type": "action", "data": ["sessionId": "test"]]))
+                socket.emit(try iflyResult(0, text: "提前结束", final: true))
+                spin(0.5, until: { completions > 0 })
+                try check(failures == 1 && finals == 0 && completions == 1, "Early termination claimed success")
+                provider.disconnect()
+            }),
+            ("ASR: HTTP empty capture finishes disconnected without upload", {
+                MockProtocol.reset([])
+                let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MockProtocol.self]
+                let provider = HTTPTranscriptionProvider(snapshot: speechSample(.custom), configuration: config)
+                var result: String?, errors = 0
+                provider.connect(apiKey: nil, model: "", onPartial: { _ in }, onFinal: { _ in }, onError: { _ in errors += 1 })
+                provider.finish { result = $0 }; spin(0.2, until: { result != nil })
+                try check(result == "" && errors == 0 && !provider.isReady && MockProtocol.requests.isEmpty, "Empty capture uploaded or stayed connected")
+                provider.disconnect()
+            }),
+            ("ASR: cancel suppresses late socket results and setup timeout completes once", {
+                let socket = FakeSpeechSocket(); let provider = StreamingSpeechProvider(snapshot: speechSample(.iflytek), makeSocket: { socket }, setupTimeout: 0.08, finalTimeout: 0.08)
+                var output = 0, errors = 0
+                provider.connect(apiKey: nil, model: "", onPartial: { _ in output += 1 }, onFinal: { _ in output += 1 }, onError: { _ in errors += 1 })
+                spin(0.25, until: { errors > 0 }); try check(errors == 1, "Setup did not time out")
+                provider.disconnect(); spin(0.03)
+                socket.emit(try iflyResult(0, text: "late", final: true)); spin(0.06)
+                try check(output == 0 && errors == 1 && socket.closed, "Cancelled callback escaped")
+            }),
+            ("ASR: stream send failure and buffer limit report errors instead of dropping audio", {
+                for oversized in [false, true] {
+                    let socket = FakeSpeechSocket(); socket.sendFailure = !oversized
+                    let provider = StreamingSpeechProvider(snapshot: speechSample(.volcengine), makeSocket: { socket })
+                    var errors = 0
+                    provider.connect(apiKey: nil, model: "", onPartial: { _ in }, onFinal: { _ in }, onError: { _ in errors += 1 })
+                    if oversized { provider.sendAudio(Data(repeating: 0, count: 960002)) }
+                    spin(0.5, until: { errors > 0 }); try check(errors == 1, "Audio loss was silent")
+                    provider.disconnect()
+                }
+            }),
+            ("ASR: recording snapshot survives selection changes and cancelled callbacks", {
+                var sample = speechSample(.qwen); var made: [FakeCloudSpeechProvider] = []
+                let service = CloudSpeechService(snapshotProvider: { sample }, factory: { snapshot in let p = FakeCloudSpeechProvider(snapshot.connection.id); made.append(p); return p })
+                var texts: [String] = []
+                service.connect(onPartial: { texts.append($0) }, onFinal: { texts.append($0) }, onError: { _ in })
+                let original = made[0]; sample = speechSample(.volcengine)
+                service.preconnect(); try check(made.count == 1, "Preconnect replaced active recording")
+                service.disconnect(); original.partial?("stale")
+                service.connect(onPartial: { texts.append($0) }, onFinal: { texts.append($0) }, onError: { _ in })
+                made.last?.partial?("current"); spin(0.02)
+                try check(texts == ["current"] && made.count == 2 && original.disconnected, "Session leaked across connections")
+                service.disconnect()
+            }),
+            ("ASR: Qwen-only preconnection never starts idle sessions on new vendors", {
+                for vendor in [SpeechVendor.iflytek, .volcengine, .custom, .qwen] {
+                    let sample = speechSample(vendor); let provider = FakeCloudSpeechProvider(sample.connection.id)
+                    let service = CloudSpeechService(snapshotProvider: { sample }, factory: { _ in provider })
+                    service.preconnect(); try check(provider.preconnectCount == (vendor == .qwen ? 1 : 0), "Idle billable session created")
+                    service.disconnect()
+                }
+            }),
+            ("ASR: custom HTTP WAV and multipart body use audio endpoint and no AI context", {
+                let sample = speechSample(.custom), pcm = Data([1,0,2,0])
+                let request = try HTTPTranscriptionProvider.request(snapshot: sample, pcm: pcm, boundary: "test-boundary")
+                let body = String(decoding: request.httpBody!, as: UTF8.self)
+                try check(request.url!.path == "/audio/transcriptions" && request.httpMethod == "POST", "Wrong endpoint")
+                try check(body.contains("whisper-compatible") && body.contains("speech.wav") && !body.contains("prompt") && !body.contains("test-key"), "Wrong body")
+                let wav = HTTPTranscriptionProvider.wav(pcm)
+                try check(wav.count == 48 && wav.suffix(4) == pcm && String(decoding: wav.prefix(4), as: UTF8.self) == "RIFF", "Invalid WAV")
+            }),
+            ("ASR: HTTP uploads only after stop and returns final", {
+                MockProtocol.reset([.init(json: ["text": "合成转录"])])
+                let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [MockProtocol.self]
+                let provider = HTTPTranscriptionProvider(snapshot: speechSample(.custom), configuration: configuration)
+                var output: String?, errors = 0
+                provider.connect(apiKey: nil, model: "", onPartial: { _ in throwaway() }, onFinal: { _ in }, onError: { _ in errors += 1 })
+                provider.sendAudio(Data(repeating: 0, count: 3200)); spin(0.02)
+                try check(MockProtocol.requests.isEmpty, "Uploaded during recording")
+                provider.finish { output = $0 }; spin(1, until: { output != nil || errors > 0 })
+                try check(output == "合成转录" && errors == 0 && MockProtocol.requests.count == 1, "HTTP final failed")
+                provider.disconnect()
+            }),
+            ("ASR: credential retry preserves unsaved connection fields", {
+                let f = ConfigurationFixture(), sample = speechSample()
+                let c = try f.speechConnections.save(sample.connection, credentials: sample.credentials, engine: .cloud)
+                f.keys.failRead = true
+                let editor = SpeechConnectionEditor(f.speechSettings); editor.load(c)
+                try check(editor.keyLoadFailed, "Locked credential not reported")
+                editor.draft.model = "unsaved-model"
+                do { try editor.save(); throw TestFailure(description: "Unread key saved") } catch is ConfigurationError {}
+                f.keys.failRead = false; editor.retryCredentialRead()
+                try check(editor.draft.model == "unsaved-model" && editor.credentials == sample.credentials && editor.isDirty, "Retry lost draft")
+                editor.discard(); try check(!editor.isDirty && editor.draft.model == c.model, "Discard did not restore saved value")
+            }),
+            ("ASR: corrupt storage is retained and blocks partial overwrite", {
+                let f = ConfigurationFixture(), sample = speechSample()
+                let s = f.speechConnections
+                try s.save(sample.connection, credentials: sample.credentials, engine: .cloud)
+                let before = s.configuration, keys = f.keys.values
+                let corrupt = Data("{broken".utf8); try corrupt.write(to: f.file("speech-connections").url)
+                s.reload()
+                try check(s.loadError != nil && s.configuration == before, "Corruption erased loaded state")
+                do { try s.select(nil, engine: .local); throw TestFailure(description: "Overwrote corrupt file") } catch is ConfigurationError {}
+                try check(try Data(contentsOf: f.file("speech-connections").url) == corrupt && f.keys.values == keys, "Corrupt source or keys changed")
+            }),
+            ("ASR: selecting another saved connection preserves automatic local fallback", {
+                let f = ConfigurationFixture(), first = speechSample(), second = speechSample(.volcengine)
+                let a = try f.speechConnections.save(first.connection, credentials: first.credentials, engine: .cloud)
+                try f.speechConnections.save(second.connection, credentials: second.credentials, engine: .auto)
+                let editor = SpeechConnectionEditor(f.speechSettings)
+                try editor.select(a)
+                try check(f.speechConnections.active?.id == a.id && f.speechConnections.engine == .auto, "Switch discarded fallback preference")
+            }),
+            ("ASR: saved engine repairs stale legacy preference on restart", {
+                let f = ConfigurationFixture(), sample = speechSample()
+                try f.speechConnections.save(sample.connection, credentials: sample.credentials, engine: .cloud)
+                f.defaults.set(SpeechRecognitionProvider.local.rawValue, forKey: "speechRecognitionProvider")
+                f.speechConnections.reload()
+                try check(f.defaults.string(forKey: "speechRecognitionProvider") == SpeechRecognitionProvider.cloud.rawValue, "Recording would use stale engine")
+            }),
+            ("ASR: streaming stop timeout completes once even when error handler disconnects", {
+                let sample = speechSample(.iflytek), socket = FakeSpeechSocket()
+                let provider = StreamingSpeechProvider(snapshot: sample, makeSocket: { socket }, finalTimeout: 0.1)
+                let service = CloudSpeechService(snapshotProvider: { sample }, factory: { _ in provider })
+                var errors = 0, completions = 0
+                service.connect(onPartial: { _ in }, onFinal: { _ in }, onError: { _ in errors += 1; service.disconnect() })
+                socket.emit(try speechMessage(["msg_type": "action", "data": ["sessionId": "test"]]))
+                spin(0.3, until: { service.isReady })
+                service.sendAudio(Data(repeating: 0, count: 1280))
+                service.finish { value in if value == nil { completions += 1 } }
+                spin(0.7, until: { completions > 0 }); spin(0.1)
+                try check(errors == 1 && completions == 1, "Failed stop hung or completed twice")
+            }),
+            ("ASR: HTTP empty, API error and timeout finish without leaking response content", {
+                let plans: [MockProtocol.Reply] = [.init(json: ["text": " "]), .init(json: ["error": "private response"], status: 401), .init(json: [:], error: URLError(.timedOut))]
+                for plan in plans {
+                    MockProtocol.reset([plan])
+                    let c = URLSessionConfiguration.ephemeral; c.protocolClasses = [MockProtocol.self]
+                    let sample = speechSample(.custom), provider = HTTPTranscriptionProvider(snapshot: speechSample(.custom), configuration: c)
+                    let service = CloudSpeechService(snapshotProvider: { sample }, factory: { _ in provider })
+                    var failures: [String] = [], completions = 0, finals = 0
+                    service.connect(onPartial: { _ in }, onFinal: { _ in finals += 1 }, onError: { failures.append($0.localizedDescription); service.disconnect() })
+                    service.sendAudio(Data(repeating: 0, count: 3200)); service.finish { if $0 == nil { completions += 1 } }
+                    spin(1, until: { completions > 0 })
+                    try check(completions == 1 && failures.count == 1 && finals == 0 && !failures[0].contains("private response"), "Failure leaked or hung")
+                }
+            }),
+            ("ASR: cancelling an in-flight HTTP upload suppresses all late callbacks", {
+                MockProtocol.reset([.init(json: ["text": "late result"], delay: 0.15)])
+                let c = URLSessionConfiguration.ephemeral; c.protocolClasses = [MockProtocol.self]
+                let provider = HTTPTranscriptionProvider(snapshot: speechSample(.custom), configuration: c)
+                var callbacks = 0
+                provider.connect(apiKey: nil, model: "", onPartial: { _ in callbacks += 1 }, onFinal: { _ in callbacks += 1 }, onError: { _ in callbacks += 1 })
+                provider.sendAudio(Data(repeating: 0, count: 3200)); provider.finish { _ in callbacks += 1 }
+                spin(0.1, until: { !MockProtocol.requests.isEmpty }); provider.disconnect(); spin(0.3)
+                try check(callbacks == 0 && provider.connectionState == .idle, "Cancelled request delivered text")
+            }),
+            ("ASR: failed finalization preserves partial text with a separate notice and no AI call", {
+                MockProtocol.reset([])
+                let f = ConfigurationFixture(), network = Fixture()
+                let vm = RecordingViewModel(snapshotProvider: { try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults) },
+                    modeNameProvider: { "测试" }, processor: network.service(), stopCapture: {}, cancelCapture: {})
+                var output: String?
+                vm.onComplete = { text, _ in output = text }
+                vm.captureStopped(); vm.handleCloudRecognitionFailure("合成网络错误")
+                vm.processAndInput("已识别的部分")
+                try check(output == "已识别的部分" && vm.fallbackNotice?.contains("遗漏") == true && MockProtocol.requests.isEmpty, "Incomplete recognition treated as complete")
+            }),
+            ("ASR: finalization failure without text is visible and cannot submit an empty result", {
+                let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "Unused AI") }, modeNameProvider: { "测试" }, stopCapture: {}, cancelCapture: {})
+                var notices: [String] = [], delivered = false, cancelled = false
+                vm.onRecognitionFailure = { notices.append($0) }; vm.onComplete = { _, _ in delivered = true }; vm.onCancel = { cancelled = true }
+                vm.captureStopped(); vm.handleCloudRecognitionFailure("合成接口错误"); vm.processAndInput("")
+                try check(notices.count == 1 && notices[0].contains("合成接口错误") && cancelled && !delivered && !vm.isProcessing, "Empty failure hidden or processing stuck")
+            })
+        ]
+    }
+    static func throwaway() {}
 }

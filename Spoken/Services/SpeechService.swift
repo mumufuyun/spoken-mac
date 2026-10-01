@@ -61,6 +61,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     }
     private var state: RecordingState = .idle
 
+    private var cloudSnapshot: SpeechSessionSnapshot?
     private var lastRecognizedText = ""
     private var capturedOnPartial: ((String) -> Void)?
     private var capturedOnFinal: ((String) -> Void)?
@@ -204,6 +205,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         if let id, activeSessionID != id { return false }
         let hadSession = activeSessionID != nil
         activeSessionID = nil
+        cloudSnapshot = nil
         acceptsSessionAudio = false
         sessionAudioReceived = false
         sessionCloudReady = false
@@ -426,6 +428,20 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         capturedOnStartFailure = onStartFailure
         capturedOnCaptureStopped = onCaptureStopped
         logInfo("startRecording, provider=\(provider.rawValue)")
+        cloudSnapshot = nil
+        if provider != .local {
+            do { cloudSnapshot = try SpeechConnectionStore.shared.snapshot() }
+            catch {
+                if provider == .auto {
+                    currentProvider = .local
+                    installTapAndStart(onPartial: onPartial, onFinal: onFinal, onCaptureReady: onCaptureReady, sessionID: sessionID)
+                    return true
+                }
+                failStart(error.localizedDescription, sessionID: sessionID)
+                return false
+            }
+        }
+
 
         switch provider {
         case .local:
@@ -486,6 +502,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             self.logInfo("CloudSpeechService session ready")
             let shouldNotifyCaptureReady = self.markCloudReadyAndShouldNotify(for: sessionID)
             DispatchQueue.main.async {
+                guard self.isActiveSession(sessionID) else { return }
                 self.onCloudConnected?()
                 if shouldNotifyCaptureReady { onCaptureReady() }
             }
@@ -507,13 +524,15 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             }
             .store(in: &cancellables)
 
-        let modelName = UserDefaults.standard.string(forKey: "speech_model_name") ?? "qwen3-asr-flash-realtime"
         CloudSpeechService.shared.connect(
-            model: modelName,
+            snapshot: cloudSnapshot,
             onPartial: { [weak self] text in
                 guard let self, self.isActiveSession(sessionID) else { return }
                 self.lastRecognizedText = text
-                DispatchQueue.main.async { self.capturedOnPartial?(text) }
+                DispatchQueue.main.async {
+                    guard self.isActiveSession(sessionID) else { return }
+                    self.capturedOnPartial?(text)
+                }
             },
             onFinal: { [weak self] text in
                 guard let self, self.isActiveSession(sessionID) else { return }
@@ -522,7 +541,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             onError: { [weak self] error in
                 guard let self, self.isActiveSession(sessionID) else { return }
                 self.logError("Cloud speech failed after retries: \(error.localizedDescription)")
-                DispatchQueue.main.async { self.onCloudConnectionFailed?(error.localizedDescription) }
+                // Provider errors arrive on main. Report before finish invalidates this session,
+                // without deferring through a mutable callback belonging to a newer recording.
+                self.onCloudConnectionFailed?(error.localizedDescription)
                 // Provider 已经用完重试机会，同时清掉调度层持有的旧会话，
                 // 避免下一次录音误用失效连接。
                 CloudSpeechService.shared.disconnect()
@@ -537,6 +558,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             }
         )
 
+        guard isActiveSession(sessionID), currentProvider != .local else { return }
         let tapInstalled = installCloudAudioTap(
             onAudioBuffered: onAudioBuffered,
             onCaptureReady: onCaptureReady,
@@ -738,6 +760,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         rebuildAudioEngine()
         resetAudioReceived(for: sessionID)
 
+        guard isActiveSession(sessionID), currentProvider != .local else { return }
         let tapInstalled = installCloudAudioTap(
             onAudioBuffered: onAudioBuffered,
             onCaptureReady: onCaptureReady,
@@ -1016,7 +1039,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                 guard let self, self.isActiveSession(sessionID), self.state == .stopping else { return }
                 let bestText = CloudRecognitionResultResolver.best(
                     cloudText: cloudText,
-                    latestPartial: lastText
+                    latestPartial: self.lastRecognizedText.isEmpty ? lastText : self.lastRecognizedText
                 )
                 self.completeStoppedRecording(text: bestText)
             }

@@ -201,7 +201,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         set { stateQueue.async { self.stateCallback = newValue } }
     }
 
-    private override init() {
+    private let configuredSnapshot: SpeechSessionSnapshot?
+
+    init(snapshot: SpeechSessionSnapshot? = nil) {
+        configuredSnapshot = snapshot
         super.init()
         stateQueue.setSpecific(key: queueKey, value: ())
     }
@@ -213,11 +216,11 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         onFinal: @escaping (String) -> Void,
         onError: @escaping (Error) -> Void
     ) {
-        let resolvedKey = apiKey ?? SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
-        let resolvedModel = model.isEmpty
+        let resolvedKey = configuredSnapshot?.credentials.apiKey ?? apiKey ?? SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
+        let resolvedModel = configuredSnapshot?.connection.model ?? (model.isEmpty
             ? (UserDefaults.standard.string(forKey: "speech_model_name") ?? "qwen3-asr-flash-realtime")
-            : model
-        let resolvedEndpointHost = QwenEndpointResolver.host(
+            : model)
+        let resolvedEndpointHost = configuredSnapshot.flatMap { URL(string: $0.connection.endpoint)?.host } ?? QwenEndpointResolver.host(
             workspaceID: UserDefaults.standard.string(forKey: "speech_workspace_id")
         )
 
@@ -290,10 +293,10 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     }
 
     func preconnect() {
-        let resolvedKey = SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
-        let resolvedModel = UserDefaults.standard.string(forKey: "speech_model_name")
+        let resolvedKey = configuredSnapshot?.credentials.apiKey ?? SecureKeyStorage.shared.readSpeechAPIKey() ?? ""
+        let resolvedModel = configuredSnapshot?.connection.model ?? UserDefaults.standard.string(forKey: "speech_model_name")
             ?? "qwen3-asr-flash-realtime"
-        let resolvedEndpointHost = QwenEndpointResolver.host(
+        let resolvedEndpointHost = configuredSnapshot.flatMap { URL(string: $0.connection.endpoint)?.host } ?? QwenEndpointResolver.host(
             workspaceID: UserDefaults.standard.string(forKey: "speech_workspace_id")
         )
         guard !resolvedKey.isEmpty else { return }
@@ -388,6 +391,13 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         }
     }
 
+    static func configuredURL(_ connection: SpeechConnection) -> URL? {
+        guard var url = URLComponents(string: connection.endpoint), url.scheme == "wss", url.host != nil else { return nil }
+        var query = (url.queryItems ?? []).filter { $0.name != "model" }
+        query.append(URLQueryItem(name: "model", value: connection.model)); url.queryItems = query
+        return url.url
+    }
+
     // MARK: - Connection lifecycle
 
     private func startConnectionAttempt() {
@@ -402,7 +412,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         sessionFinishSent = false
         intentionallyClosing = false
 
-        guard let url = QwenEndpointResolver.webSocketURL(host: endpointHost, model: model) else {
+        guard let url = configuredSnapshot.flatMap({ Self.configuredURL($0.connection) }) ?? QwenEndpointResolver.webSocketURL(host: endpointHost, model: model) else {
             failPermanently(CloudSpeechError.invalidURL)
             return
         }

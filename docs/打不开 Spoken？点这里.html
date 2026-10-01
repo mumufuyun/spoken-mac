@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>打不开 Spoken？</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #faf7f2; --card: #fffdfa; --text: #302d2a; --muted: #6d655e; --line: #e4ddd4; --accent: #a83925; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 20px; background: var(--bg); color: var(--text); font: 17px/1.8 -apple-system, BlinkMacSystemFont, sans-serif; }
+    main { max-width: 640px; margin: 32px auto; padding: clamp(24px, 5vw, 48px); background: var(--card); border: 1px solid var(--line); border-radius: 24px; }
+    .brand { margin: 0 0 16px; color: var(--muted); font-size: 14px; letter-spacing: .08em; }
+    h1 { margin: 0; font-size: clamp(28px, 6vw, 38px); line-height: 1.25; }
+    p { margin: 20px 0; }
+    .muted { color: var(--muted); font-size: 15px; }
+    a { color: var(--accent); text-underline-offset: 4px; }
+    .button { display: inline-block; max-width: 100%; padding: 12px 22px; border-radius: 12px; background: var(--accent); color: white; text-decoration: none; font-weight: 600; }
+    a:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; }
+    ol { padding-left: 24px; }
+    li { margin: 12px 0; }
+    details { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 28px; }
+    summary { cursor: pointer; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #1e1c1a; --card: #282522; --text: #f5f0e9; --muted: #c4b9ad; --line: #494039; --accent: #ffac94; } .button { color: #302019; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Spoken · 首次打开</p>
+    <h1>被 macOS 拦住了？</h1>
+    <p>如果提示“无法验证开发者”或“Apple 无法检查是否包含恶意软件”，先关闭提示，再打开下面的设置页。</p>
+    <a class="button" href="x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension">打开“隐私与安全性” ↗</a>
+    <p class="muted">请在 Mac 上点击。浏览器可能先询问是否打开“系统设置”；跳转后可能需要向下滚动到“安全性”。</p>
+    <ol>
+      <li>找到关于 <strong>Spoken</strong> 的拦截记录，点击<strong>“仍要打开”</strong>（部分系统先显示“打开”）。</li>
+      <li>按系统提示验证身份，再确认打开。</li>
+      <li>在屏幕右上方菜单栏找到 Spoken 麦克风图标，继续完成权限设置。</li>
+    </ol>
+    <p class="muted">没有跳转？手动进入苹果菜单 → 系统设置 → 隐私与安全性 → 安全性。<br>没有拦截记录？先把 Spoken 拖入“应用程序”，双击尝试打开，再返回此页；“仍要打开”通常在尝试后约一小时内可用。</p>
+    <details>
+      <summary>下载来源与后续授权</summary>
+      <p>当前测试版采用本地签名，尚未完成 Apple Developer ID 签名与公证。请确认安装包来自可信下载页面或项目维护者，再决定是否继续打开。</p>
+      <p>若提示“将损坏你的电脑”“包含恶意软件”或“应用已损坏”，请停止使用当前包，重新从可信来源下载或反馈开发者。受公司或学校管理的 Mac 可能需要管理员协助。</p>
+      <p>本页只提供设置入口，不能检测拦截或代替系统确认。允许启动后，自动填入输入框还需单独授予“辅助功能”权限；按 Spoken 内的引导完成即可。</p>
+      <p><a href="安装与首次打开.txt">完整安装指引</a> · <a href="https://support.apple.com/zh-cn/102445" target="_blank" rel="noreferrer">Apple 官方说明 ↗</a></p>
+    </details>
+  </main>
+</body>
+</html>

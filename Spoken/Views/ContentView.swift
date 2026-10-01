@@ -3,6 +3,8 @@ import SwiftUI
 struct ContentView: View {
     let onOpenSettings: (SettingsSection) -> Void
     @ObservedObject var modes: ModeStore
+    @ObservedObject var speechConnections: SpeechConnectionStore
+    @ObservedObject private var activity = StateManager.shared
     @ObservedObject var connections: ModelConnectionStore
     @ObservedObject var hotkeys: HotKeyService
     @ObservedObject var accessibility: AccessibilityPermissionService
@@ -12,11 +14,12 @@ struct ContentView: View {
     private let heightOverride: CGFloat?
 
     init(onOpenSettings: @escaping (SettingsSection) -> Void, modes: ModeStore = .shared,
-         connections: ModelConnectionStore = .shared, hotkeys: HotKeyService? = nil, accessibility: AccessibilityPermissionService? = nil, defaults: UserDefaults = .standard, panelHeight: CGFloat? = nil) {
+         connections: ModelConnectionStore = .shared, speechConnections: SpeechConnectionStore? = nil, hotkeys: HotKeyService? = nil, accessibility: AccessibilityPermissionService? = nil, defaults: UserDefaults = .standard, panelHeight: CGFloat? = nil) {
         self.onOpenSettings = onOpenSettings
         heightOverride = panelHeight
         _modes = ObservedObject(wrappedValue: modes)
         _connections = ObservedObject(wrappedValue: connections)
+        _speechConnections = ObservedObject(wrappedValue: speechConnections ?? .shared)
         _hotkeys = ObservedObject(wrappedValue: hotkeys ?? .shared)
         _accessibility = ObservedObject(wrappedValue: accessibility ?? .shared)
         _language = AppStorage(wrappedValue: TranslateLanguage.original.rawValue, "translateLang", store: defaults)
@@ -68,6 +71,33 @@ struct ContentView: View {
                     }
                 }
                 HStack {
+                    Text("语音识别").foregroundStyle(.secondary)
+                    Spacer()
+                    if speechConnections.connections.isEmpty {
+                        Button("本地识别 · 添加云端") { onOpenSettings(.speech) }
+                    } else {
+                        Picker("语音识别", selection: Binding(get: {
+                            speechConnections.engine == .local ? "local" : (speechConnections.configuration.activeID ?? "local")
+                        }, set: { id in
+                            guard !activity.isBusy() else { return }
+                            do {
+                                try speechConnections.select(id == "local" ? speechConnections.configuration.activeID : id,
+                                                             engine: id == "local" ? .local : (speechConnections.engine == .auto ? .auto : .cloud))
+                                #if !SPOKEN_OFFLINE_TESTS
+                                CloudSpeechService.shared.disconnect()
+                                if id != "local" { SpeechService.shared.prepareCloudConnection() }
+                                #endif
+                                error = nil
+                            } catch { self.error = error.localizedDescription }
+                        })) {
+                            Text("本地识别").tag("local")
+                            ForEach(speechConnections.connections) { Text($0.name).tag($0.id) }
+                        }.labelsHidden().frame(maxWidth: 220).disabled(activity.isBusy())
+                        Button { onOpenSettings(.speech) } label: { Image(systemName: "slider.horizontal.3") }
+                            .buttonStyle(.plain).help("管理语音连接").accessibilityLabel("管理语音连接")
+                    }
+                }
+                HStack {
                     Text("输出语言").foregroundStyle(.secondary)
                     Spacer()
                     Picker("输出语言", selection: $language) {
@@ -75,7 +105,7 @@ struct ContentView: View {
                     }.labelsHidden().frame(width: 125)
                 }
             }.font(.callout)
-            if let message = error ?? modes.loadError ?? connections.loadError {
+            if let message = error ?? modes.loadError ?? connections.loadError ?? speechConnections.loadError {
                 Text(message).font(.caption).foregroundStyle(.red).lineLimit(2).help(message)
             } else if let active = connections.active, active.credentialID == nil {
                 Button("当前连接缺少密钥，前往配置") { onOpenSettings(.models) }.font(.caption)

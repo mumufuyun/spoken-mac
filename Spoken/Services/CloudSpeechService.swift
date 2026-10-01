@@ -182,38 +182,6 @@ protocol CloudSpeechProvider: AnyObject {
     func cancelPreconnect()
 }
 
-// MARK: - Provider 注册表
-
-final class CloudSpeechProviderRegistry: @unchecked Sendable {
-    static let shared = CloudSpeechProviderRegistry()
-    private var providers: [String: CloudSpeechProvider] = [:]
-    private let lock = NSLock()
-
-    private init() {}
-
-    func register(_ provider: CloudSpeechProvider) {
-        lock.lock()
-        defer { lock.unlock() }
-        providers[provider.providerId] = provider
-    }
-
-    func provider(id: String) -> CloudSpeechProvider? {
-        lock.lock()
-        defer { lock.unlock() }
-        return providers[id]
-    }
-
-    func defaultProvider() -> CloudSpeechProvider? {
-        provider(id: "qwen-realtime")
-    }
-
-    func allProviders() -> [CloudSpeechProvider] {
-        lock.lock()
-        defer { lock.unlock() }
-        return Array(providers.values)
-    }
-}
-
 // MARK: - 自检报告
 
 struct CloudHealthReport {
@@ -254,157 +222,109 @@ enum CloudSpeechError: LocalizedError {
 
 // MARK: - CloudSpeechService 调度层
 
-/// 云端语音识别调度服务：管理 Provider 注册、状态监控、自检
+/// 按录音快照选择云端接口，隔离连接状态与迟到回调。
 final class CloudSpeechService: NSObject, @unchecked Sendable {
     static let shared = CloudSpeechService()
-    private static let logger = UnifiedLogger(subsystem: "com.moss.spoken", category: "CloudSpeechService")
-
-    private var currentProvider: CloudSpeechProvider?
-    private let providerLock = NSLock()
+    private let snapshotProvider: () throws -> SpeechSessionSnapshot
+    private let factory: (SpeechSessionSnapshot) -> CloudSpeechProvider
+    private let lock = NSRecursiveLock()
+    private var current: CloudSpeechProvider?
+    private var snapshot: SpeechSessionSnapshot?
+    private var generation = UUID()
+    private var recording = false
+    private var pendingFinish: ((String?) -> Void)?
     var onConnected: (() -> Void)?
-
     @Published private(set) var connectionState: CloudConnectionState = .idle
     private(set) var lastHealthReport: CloudHealthReport?
 
-    private override init() {
+    init(snapshotProvider: @escaping () throws -> SpeechSessionSnapshot = { try SpeechConnectionStore.shared.snapshot() },
+         factory: @escaping (SpeechSessionSnapshot) -> CloudSpeechProvider = CloudSpeechService.makeProvider) {
+        self.snapshotProvider = snapshotProvider; self.factory = factory
         super.init()
-        CloudSpeechProviderRegistry.shared.register(ReliableQwenSpeechProvider.shared)
     }
-
-    private func logInfo(_ msg: String) {
-        Self.logger.info(msg)
-    }
-    private func logWarn(_ msg: String) {
-        Self.logger.warning(msg)
-    }
-    private func logError(_ msg: String) {
-        Self.logger.error(msg)
-    }
-
-    private func resolveProvider() -> CloudSpeechProvider? {
-        let providerId = UserDefaults.standard.string(forKey: "cloud_speech_provider") ?? "qwen-realtime"
-        let provider = CloudSpeechProviderRegistry.shared.provider(id: providerId)
-        if provider == nil {
-            logWarn("Provider '\(providerId)' not found, falling back to qwen-realtime")
-            return CloudSpeechProviderRegistry.shared.defaultProvider()
+    static func makeProvider(_ snapshot: SpeechSessionSnapshot) -> CloudSpeechProvider {
+        switch snapshot.connection.api {
+        case .qwenRealtime: return ReliableQwenSpeechProvider(snapshot: snapshot)
+        case .iflytekRealtime, .volcengineStreaming: return StreamingSpeechProvider(snapshot: snapshot)
+        case .openAITranscription: return HTTPTranscriptionProvider(snapshot: snapshot)
         }
+    }
+    private func matches(_ id: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return generation == id }
+    private func use(_ next: SpeechSessionSnapshot) -> CloudSpeechProvider {
+        if let current, snapshot == next { return current }
+        current?.disconnect(); generation = UUID()
+        let provider = factory(next); current = provider; snapshot = next
         return provider
     }
-
-    func switchProvider(to providerId: String) {
-        logInfo("Switching provider to: \(providerId)")
-        disconnect()
-        UserDefaults.standard.set(providerId, forKey: "cloud_speech_provider")
-    }
-
-    private func bindProviderState(_ provider: CloudSpeechProvider) {
+    private func bind(_ provider: CloudSpeechProvider, id: UUID) {
         provider.onConnectionStateChanged = { [weak self] state in
-            guard let self else { return }
             DispatchQueue.main.async {
+                guard let self, self.matches(id) else { return }
                 self.connectionState = state
-                if case .connected = state {
-                    self.onConnected?()
-                }
+                if state == .connected { self.onConnected?() }
             }
         }
     }
-
-    private func lockedCurrentProvider() -> CloudSpeechProvider? {
-        providerLock.lock()
-        defer { providerLock.unlock() }
-        return currentProvider
+    func connect(snapshot supplied: SpeechSessionSnapshot? = nil, onPartial: @escaping (String) -> Void,
+                 onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        do {
+            let next = try supplied ?? snapshotProvider()
+            let provider = use(next); recording = true; generation = UUID(); let id = generation
+            bind(provider, id: id)
+            provider.connect(apiKey: next.credentials.apiKey, model: next.connection.model,
+                onPartial: { [weak self] text in guard self?.matches(id) == true else { return }; onPartial(text) },
+                onFinal: { [weak self] text in guard self?.matches(id) == true else { return }; onFinal(text) },
+                onError: { [weak self] error in
+                    guard let self else { return }
+                    self.lock.lock()
+                    guard self.generation == id else { self.lock.unlock(); return }
+                    let completion = self.pendingFinish; self.pendingFinish = nil; self.recording = false
+                    self.lock.unlock()
+                    // The caller may disconnect in onError. A stopped recording must still finish
+                    // exactly once; its own session guard rejects a subsequently cancelled capture.
+                    onError(error)
+                    completion?(nil)
+                })
+        } catch { connectionState = .failed(error.localizedDescription); onError(error) }
     }
-
-    func connect(apiKey: String? = nil, model: String = "", onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
-        guard let provider = resolveProvider() else {
-            connectionState = .failed("未找到可用的云端识别服务")
-            onError(CloudSpeechError.providerNotFound("default"))
-            return
-        }
-        if let current = lockedCurrentProvider(), current.providerId != provider.providerId {
-            current.disconnect()
-        }
-        providerLock.lock()
-        currentProvider = provider
-        providerLock.unlock()
-        bindProviderState(provider)
-        provider.connect(apiKey: apiKey, model: model, onPartial: onPartial, onFinal: onFinal, onError: onError)
-    }
-
     func preconnect() {
-        guard let provider = resolveProvider() else { return }
-        if let current = lockedCurrentProvider(), current.providerId != provider.providerId {
-            current.disconnect()
-        }
-        providerLock.lock()
-        currentProvider = provider
-        providerLock.unlock()
-        bindProviderState(provider)
-        provider.preconnect()
+        lock.lock(); defer { lock.unlock() }
+        guard !recording else { return }
+        do {
+            let next = try snapshotProvider()
+            let provider = use(next); bind(provider, id: generation)
+            if next.connection.api == .qwenRealtime { provider.preconnect() }
+        } catch { connectionState = .failed(error.localizedDescription) }
     }
-
-    func sendAudio(_ data: Data) {
-        providerLock.lock()
-        let provider = currentProvider
-        providerLock.unlock()
-        provider?.sendAudio(data)
-    }
-
+    func sendAudio(_ data: Data) { lock.lock(); let provider = current; lock.unlock(); provider?.sendAudio(data) }
     func finish(completion: @escaping (String?) -> Void) {
-        providerLock.lock()
-        let provider = currentProvider
-        providerLock.unlock()
-        guard let provider else {
-            completion(nil)
-            return
-        }
+        lock.lock()
+        guard let provider = current, pendingFinish == nil else { lock.unlock(); completion(nil); return }
+        let id = generation; pendingFinish = completion
+        lock.unlock()
         provider.finish { [weak self] text in
-            completion(text)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                guard let self else { return }
-                let raw = UserDefaults.standard.string(forKey: "speechRecognitionProvider")
-                    ?? SpeechRecognitionProvider.local.rawValue
-                let recognitionProvider = SpeechRecognitionProvider(rawValue: raw) ?? .local
-                if recognitionProvider == .cloud || recognitionProvider == .auto {
-                    self.preconnect()
-                }
-            }
+            guard let self else { return }
+            self.lock.lock()
+            guard self.generation == id else { self.lock.unlock(); return }
+            let callback = self.pendingFinish; self.pendingFinish = nil; self.recording = false
+            self.lock.unlock()
+            callback?(text)
         }
     }
-
     func disconnect() {
-        providerLock.lock()
-        let provider = currentProvider
-        currentProvider = nil
-        providerLock.unlock()
-        provider?.disconnect()
-        connectionState = .idle
+        lock.lock(); defer { lock.unlock() }
+        generation = UUID(); pendingFinish = nil
+        current?.disconnect(); current = nil; snapshot = nil; recording = false; connectionState = .idle
     }
-
     func performHealthCheck() -> CloudHealthReport {
-        guard let provider = lockedCurrentProvider() ?? resolveProvider() else {
-            let report = CloudHealthReport(providerId: "unknown", providerName: "未知", state: .failed("未配置"), isHealthy: false, details: "未配置云端识别 Provider")
-            lastHealthReport = report
-            return report
-        }
-        let isHealthy = provider.isReady
-        let report = CloudHealthReport(
-            providerId: provider.providerId,
-            providerName: provider.displayName,
-            state: provider.connectionState,
-            isHealthy: isHealthy,
-            details: isHealthy ? "连接正常" : provider.connectionState.isFailed ? "连接失败" : "未连接"
-        )
-        lastHealthReport = report
-        return report
+        lock.lock(); defer { lock.unlock() }
+        let report = CloudHealthReport(providerId: current?.providerId ?? "none", providerName: current?.displayName ?? "未配置",
+            state: connectionState, isHealthy: current?.isReady ?? false,
+            details: snapshot?.connection.api == .openAITranscription ? "结束录音后提交；尚未验证远端识别" : (current?.isReady == true ? "会话已就绪" : "未连接"))
+        lastHealthReport = report; return report
     }
-
-    var isReady: Bool { lockedCurrentProvider()?.isReady ?? false }
-    var currentProviderName: String { lockedCurrentProvider()?.displayName ?? resolveProvider()?.displayName ?? "未配置" }
-
-    func availableProviders() -> [(id: String, name: String)] {
-        return CloudSpeechProviderRegistry.shared.allProviders().map {
-            (id: $0.providerId, name: $0.displayName)
-        }
-    }
+    var isReady: Bool { lock.lock(); defer { lock.unlock() }; return current?.isReady ?? false }
+    var currentProviderName: String { lock.lock(); defer { lock.unlock() }; return current?.displayName ?? "未配置" }
+    func availableProviders() -> [(id: String, name: String)] { SpeechVendor.allCases.map { ($0.rawValue, $0.name) } }
 }

@@ -45,294 +45,228 @@ struct FlowLayout: Layout {
 
 struct SpeechSettingsDependencies {
     var defaults: UserDefaults
-    var readKey: () throws -> String?
-    var saveKey: (String) -> Bool
+    var store: SpeechConnectionStore
     var refreshConnection: (SpeechRecognitionProvider) -> Void
-    var providers: () -> [(id: String, name: String)]
+    var isBusy: () -> Bool
     var metrics: () -> ASRMetricsSnapshot
     var latency: () -> [String: PipelineLatencyMetrics.Distribution]
-
     static var live: Self {
-        Self(defaults: .standard, readKey: { try SecureKeyStorage.shared.readSpeechCredential() },
-             saveKey: { SecureKeyStorage.shared.saveSpeechAPIKey($0) }, refreshConnection: { provider in
-                CloudSpeechService.shared.disconnect()
-                if provider == .cloud || provider == .auto { SpeechService.shared.prepareCloudConnection() }
-             }, providers: { CloudSpeechService.shared.availableProviders() },
-             metrics: { ASRStabilityMetrics.shared.snapshot() }, latency: { PipelineLatencyMetrics.shared.distributions() })
+        Self(defaults: .standard, store: .shared, refreshConnection: { provider in
+            CloudSpeechService.shared.disconnect()
+            if provider != .local { SpeechService.shared.prepareCloudConnection() }
+        }, isBusy: { MainActor.assumeIsolated { StateManager.shared.isBusy() } },
+        metrics: { ASRStabilityMetrics.shared.snapshot() }, latency: { PipelineLatencyMetrics.shared.distributions() })
     }
 }
 
-// MARK: - 语音识别设置
+final class SpeechConnectionEditor: ObservableObject {
+    @Published var draft: SpeechConnection
+    @Published var credentials = SpeechCredentials()
+    @Published var engine: SpeechRecognitionProvider
+    @Published var error: String?
+    @Published var message = ""
+    @Published var keyLoadFailed = false
+    private var original: SpeechConnection
+    private var originalCredentials = SpeechCredentials()
+    private var originalEngine: SpeechRecognitionProvider
+    let dependencies: SpeechSettingsDependencies
+    var store: SpeechConnectionStore { dependencies.store }
+    init(_ dependencies: SpeechSettingsDependencies) {
+        self.dependencies = dependencies
+        let initial = dependencies.store.active ?? dependencies.store.connections.first ?? .preset(.qwen)
+        draft = initial; original = initial; engine = dependencies.store.engine; originalEngine = dependencies.store.engine
+    }
+    var isNew: Bool { !store.connections.contains { $0.id == draft.id } }
+    var isDirty: Bool { original != draft || originalCredentials != credentials || originalEngine != engine }
+    func load(_ connection: SpeechConnection) {
+        draft = connection; original = connection; engine = store.engine; originalEngine = engine
+        credentials = SpeechCredentials(); originalCredentials = credentials; keyLoadFailed = false; error = nil; message = ""
+        do { credentials = try store.credentials(for: connection); originalCredentials = credentials }
+        catch { keyLoadFailed = true; self.error = error.localizedDescription }
+    }
+    func retryCredentialRead() {
+        do {
+            let value = try store.credentials(for: original)
+            credentials = value; originalCredentials = value; keyLoadFailed = false; error = nil
+        } catch { keyLoadFailed = true; self.error = error.localizedDescription }
+    }
+    func create(_ vendor: SpeechVendor) {
+        var connection = SpeechConnection.preset(vendor); var suffix = 2
+        while store.connections.contains(where: { $0.name == connection.name }) { connection.name = "\(vendor.name) \(suffix)"; suffix += 1 }
+        load(connection); original.name = ""; engine = .cloud
+    }
+    func changeAPI(_ api: SpeechAPI) {
+        guard draft.api != api else { return }
+        draft.api = api; draft.endpoint = api.endpoint; draft.model = api.model; draft.appID = ""
+        draft.language = api == .iflytekRealtime ? "autodialect" : ""; draft.credentialID = nil
+        credentials = SpeechCredentials(); keyLoadFailed = false; message = ""
+    }
+    func save() throws {
+        guard !dependencies.isBusy() else { throw ConfigurationError.invalid("录音或处理期间不能修改语音连接") }
+        guard !keyLoadFailed else { throw ConfigurationError.unavailable("请先重新读取密钥，避免覆盖有效配置") }
+        do {
+            if engine == .local && !isDirtyConnection {
+                try store.select(store.configuration.activeID, engine: .local)
+                originalEngine = engine
+            } else {
+                let saved = try store.save(draft, credentials: credentials, engine: engine)
+                load(saved)
+            }
+            dependencies.refreshConnection(engine); error = nil; message = "已保存，下一次录音使用此配置"
+        } catch { self.error = error.localizedDescription; throw error }
+    }
+    private var isDirtyConnection: Bool { original != draft || originalCredentials != credentials }
+    func select(_ connection: SpeechConnection) throws {
+        guard !dependencies.isBusy() else { throw ConfigurationError.invalid("录音或处理期间不能切换语音连接") }
+        let nextEngine: SpeechRecognitionProvider = store.engine == .auto ? .auto : .cloud
+        try store.select(connection.id, engine: nextEngine); load(connection); dependencies.refreshConnection(nextEngine)
+    }
+    func discard() { load(store.connections.first { $0.id == original.id } ?? store.active ?? .preset(.qwen)) }
+    func delete() throws {
+        guard !dependencies.isBusy() else { throw ConfigurationError.invalid("录音或处理期间不能删除语音连接") }
+        try store.delete(draft.id); discard(); dependencies.refreshConnection(store.engine)
+    }
+}
 
 struct SpeechConfigSectionView: View {
     let navigation: SettingsNavigationGuard
     let dependencies: SpeechSettingsDependencies
-    @State private var originalDraft: [String] = []
-    @State private var saveError: String?
-    @State private var keyLoadFailed = false
-    private var currentDraft: [String] { [provider.rawValue, cloudProviderId, apiKey, modelName, workspaceID] }
-    @State private var provider: SpeechRecognitionProvider = .local
-    @State private var cloudProviderId: String = "dashscope"
-    @State private var apiKey: String = ""
-    @State private var modelName: String = ""
-    @State private var workspaceID: String = ""
-    @State private var saved: Bool = false
-    @State private var metrics = ASRMetricsSnapshot(sessions: 0, connected: 0, successes: 0, failures: 0, reconnects: 0, fallbacks: 0)
-    @State private var latencyMetrics: [String: PipelineLatencyMetrics.Distribution] = [:]
-
+    @ObservedObject private var store: SpeechConnectionStore
+    @ObservedObject private var activity = StateManager.shared
+    @StateObject private var editor: SpeechConnectionEditor
+    @State private var advanced = false
+    @State private var showDelete = false
+    @State private var showMetrics = false
     init(navigation: SettingsNavigationGuard, dependencies: SpeechSettingsDependencies = .live) {
-        self.navigation = navigation
-        self.dependencies = dependencies
+        self.navigation = navigation; self.dependencies = dependencies; store = dependencies.store
+        _editor = StateObject(wrappedValue: SpeechConnectionEditor(dependencies))
     }
-
-    private let textPrimary = Color.primary
-    private let textMuted = Color.secondary
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // 识别引擎选择
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("识别引擎")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(textPrimary)
-                    Text("选择语音识别方式")
-                        .font(.system(size: 11))
-                        .foregroundColor(textMuted)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // 引擎选择器
-                FlowLayout(spacing: 8) {
-                    ForEach(SpeechRecognitionProvider.allCases, id: \.rawValue) { p in
-                        Button(action: {
-                            provider = p
-                        }) {
-                            Text(p.rawValue)
-                                .font(.system(size: 11, weight: provider == p ? .medium : .regular))
-                                .foregroundColor(provider == p ? SpokenTheme.selectedText : textPrimary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(provider == p ? SpokenTheme.accent : SpokenTheme.inset)
-                                .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // 云端 Provider 选择
-                if provider == .cloud || provider == .auto {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("选择识别方式，或添加常用供应商。语音连接与 AI 处理模型分别配置。")
+                .font(.callout).foregroundStyle(.secondary)
+            Picker("识别方式", selection: $editor.engine) {
+                ForEach(SpeechRecognitionProvider.allCases, id: \.rawValue) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).disabled(activity.isBusy())
+            if activity.isBusy() { Text("录音或处理期间暂不能切换或修改连接。").font(.caption).foregroundStyle(.orange) }
+            HStack(alignment: .top, spacing: 0) {
+                ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("云端服务")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(textPrimary)
-                        Text("选择云端语音识别服务提供商")
-                            .font(.system(size: 11))
-                            .foregroundColor(textMuted)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    FlowLayout(spacing: 8) {
-                        ForEach(availableCloudProviders(), id: \.id) { p in
-                            Button(action: {
-                                cloudProviderId = p.id
-                            }) {
-                                Text(p.name)
-                                    .font(.system(size: 11, weight: cloudProviderId == p.id ? .medium : .regular))
-                                    .foregroundColor(cloudProviderId == p.id ? SpokenTheme.selectedText : textPrimary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(cloudProviderId == p.id ? SpokenTheme.accent : SpokenTheme.inset)
-                                    .cornerRadius(8)
+                        Text("已保存的连接").font(.caption).foregroundStyle(.secondary)
+                        ForEach(store.connections) { connection in
+                            Button {
+                                if navigation.allowNavigation() { editor.load(connection); advanced = connection.vendor == .custom }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(connection.name).lineLimit(1)
+                                        Text(connection.vendor.name).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if store.configuration.activeID == connection.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(SpokenTheme.accent) }
+                                }.padding(10).background(editor.draft.id == connection.id ? SpokenTheme.inset : .clear, in: RoundedRectangle(cornerRadius: 8))
+                            }.buttonStyle(.plain).help(connection.name)
+                        }
+                        Menu("添加连接") {
+                            ForEach(SpeechVendor.allCases) { vendor in
+                                Button(vendor.name) { if navigation.allowNavigation() { editor.create(vendor); advanced = vendor == .custom } }
                             }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("云端模型")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(textPrimary)
-                        TextField(defaultModelPlaceholder(), text: $modelName)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12))
-                    }
-
-                    if cloudProviderId == "qwen-realtime" {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("业务空间ID（推荐）")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(textPrimary)
-                            TextField("留空时使用DashScope公共域名", text: $workspaceID)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12))
-                            Text("填写后使用北京地域业务空间专属域名，提高实时识别连接稳定性。")
-                                .font(.system(size: 10))
-                                .foregroundColor(textMuted)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("API Key")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(textPrimary)
-                        SecureField("sk-...", text: $apiKey)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12))
-                            .accessibilityLabel("语音识别 API Key")
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
+                        }.disabled(activity.isBusy())
+                        if store.connections.isEmpty { Text("选择供应商后填写凭据即可开始。同一家供应商可保存多组连接。").font(.caption).foregroundStyle(.secondary) }
+                    }.padding(.trailing, 16)
+                }.frame(width: 170)
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
                         HStack {
-                            Text("稳定性记录")
-                                .font(.system(size: 12, weight: .semibold))
+                            Text(editor.draft.vendor.name).font(.headline)
                             Spacer()
-                            Button("刷新") {
-                                metrics = dependencies.metrics()
-                                latencyMetrics = dependencies.latency()
+                            Link("接入说明 ↗", destination: editor.draft.vendor.helpURL).font(.callout)
+                        }
+                        field("连接名称", text: $editor.draft.name)
+                        if editor.draft.vendor == .custom {
+                            Picker("接口协议", selection: Binding(get: { editor.draft.api }, set: editor.changeAPI)) {
+                                ForEach(SpeechAPI.allCases) { Text($0.name).tag($0) }
                             }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 10))
-                            .foregroundColor(SpokenTheme.accent)
+                            Text("仅支持所选协议的兼容接口。聊天模型接口或其他私有 ASR 协议不能只替换地址使用。").font(.caption).foregroundStyle(.secondary)
                         }
-                        Text("会话 \(metrics.sessions) · 成功 \(metrics.successes) · 失败 \(metrics.failures) · 重连 \(metrics.reconnects) · 本地降级 \(metrics.fallbacks)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(textMuted)
-                        if metrics.successes + metrics.failures > 0 {
-                            Text(String(format: "云端完成率 %.1f%%", metrics.successRate * 100))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(metrics.successRate >= 0.995 ? .green : .orange)
+                        if editor.draft.api == .iflytekRealtime {
+                            field("App ID", text: $editor.draft.appID)
+                            field("语种（autodialect / autominor）", text: $editor.draft.language)
+                            Text("填写“实时语音转写大模型”服务的凭据；普通听写密钥不通用。autominor 需单独开通。").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            field(editor.draft.api == .volcengineStreaming ? "资源 ID" : "模型名称", text: $editor.draft.model)
                         }
-                        if !latencyMetrics.isEmpty {
-                            Divider()
-                            latencyRow("首字", key: "hotkey_to_first_text")
-                            latencyRow("ASR收尾", key: "stop_to_asr_final")
-                            latencyRow("AI处理", key: "ai_request_to_complete")
-                            latencyRow("结束到写入", key: "stop_to_injection")
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("API Key").font(.callout)
+                            SecureField("该语音服务的 API Key", text: $editor.credentials.apiKey).textFieldStyle(.roundedBorder).accessibilityLabel("语音连接 API Key")
                         }
-                        Text("仅保存在本机，不记录音频和转录正文。")
-                            .font(.system(size: 10))
-                            .foregroundColor(textMuted)
+                        if editor.draft.api == .iflytekRealtime {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("API Secret").font(.callout)
+                                SecureField("该语音服务的 API Secret", text: $editor.credentials.apiSecret).textFieldStyle(.roundedBorder).accessibilityLabel("语音连接 API Secret")
+                            }
+                        }
+                        if editor.draft.api == .volcengineStreaming {
+                            Text("使用火山语音新版控制台的 API Key，与火山方舟聊天模型密钥不同。资源 ID 应与已开通的小时版或并发版一致。").font(.caption).foregroundStyle(.secondary)
+                        }
+                        DisclosureGroup("高级设置 · 完整接口地址", isExpanded: $advanced) {
+                            field("Endpoint", text: $editor.draft.endpoint).padding(.top, 8)
+                            if editor.draft.api == .openAITranscription { field("识别语种（可留空）", text: $editor.draft.language) }
+                        }
+                        if editor.draft.api == .qwenRealtime {
+                            Text("原业务空间地址会自动保留；使用专属域名时，可在高级设置填写完整 wss 地址。").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if editor.draft.api == .openAITranscription {
+                            Text("录音结束后上传并返回文字，不实时出字。填写完整 /audio/transcriptions 地址；单次音频最多 24 MB，请求最多等待 60 秒。").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                    .padding(10)
-                    .background(SpokenTheme.inset)
-                    .cornerRadius(8)
-                }
-
-                SettingsFeedback(error: saveError)
-                if keyLoadFailed { Button("重试读取密钥", action: retryKey) }
-
-                // 保存状态
-                if saved {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 12))
-                        Text("已保存")
-                            .font(.system(size: 12))
                     }
-                    .foregroundColor(Color.green)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                HStack(spacing: 12) {
-                    Spacer()
-                    Button("保存") {
-                        do { try saveConfig() } catch { saveError = error.localizedDescription }
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(SpokenTheme.accent)
-                    .foregroundColor(SpokenTheme.selectedText)
-                    .cornerRadius(8)
-                    .keyboardShortcut("s", modifiers: .command)
-                    .disabled(keyLoadFailed)
-                }
+                    Divider()
+                    SettingsFeedback(error: editor.error ?? store.loadError, message: editor.isDirty ? "有未保存的修改" : editor.message)
+                        if store.loadError != nil {
+                            Button("重试读取旧配置与密钥") {
+                                if navigation.allowNavigation() {
+                                    store.reload(allowCredentialPrompt: true)
+                                    if store.loadError == nil { editor.discard(); dependencies.refreshConnection(store.engine) }
+                                }
+                            }.help("解锁 Mac 后重试；系统可能请求允许 Spoken 访问旧密钥。原配置会保留，成功后才启用。")
+                        }
+                        if editor.keyLoadFailed { Button("重新读取密钥") { editor.retryCredentialRead() } }
+                        HStack {
+                            Button("保存并使用") { perform { try editor.save() } }.buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command)
+                                .disabled(editor.keyLoadFailed || store.loadError != nil)
+                            if !editor.isNew && !editor.isDirty && store.configuration.activeID != editor.draft.id {
+                                Button("立即切换") { perform { try editor.select(editor.draft) } }
+                            }
+                            Spacer()
+                            if !editor.isNew { Button("删除", role: .destructive) { showDelete = true } }
+                        }
+                        Text(editor.engine == .auto ? "自动选择：云端不可用时尝试本地识别，不会自动换到其他云端供应商。" : "保存后生效；密钥仅存入本机钥匙串，不会与其他连接共用。")
+                            .font(.caption).foregroundStyle(.secondary)
+                }.padding(.leading, 20).disabled(activity.isBusy())
+            }
+            DisclosureGroup("稳定性记录", isExpanded: $showMetrics) {
+                let metrics = dependencies.metrics()
+                Text("会话 \(metrics.sessions) · 成功 \(metrics.successes) · 失败 \(metrics.failures) · 本地回退 \(metrics.fallbacks)")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("历史统计主要来自千问链路；其他接口请以实际录音结果验收。").font(.caption).foregroundStyle(.secondary)
             }
         }
         .onAppear {
-            loadConfig()
-            navigation.install(isDirty: { currentDraft != originalDraft }, save: saveConfig, discard: loadConfig)
-            metrics = dependencies.metrics()
-            latencyMetrics = dependencies.latency()
+            editor.load(editor.draft)
+            advanced = editor.draft.vendor == .custom
+            navigation.install(isDirty: { editor.isDirty }, save: editor.save, discard: editor.discard)
         }
-        .onChange(of: currentDraft) { _, _ in saved = false }
+        .alert("删除此语音连接？", isPresented: $showDelete) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) { perform { try editor.delete() } }
+        } message: { Text("删除当前连接后将使用本地识别。其他连接不受影响。") }
     }
-
-    @ViewBuilder
-    private func latencyRow(_ label: String, key: String) -> some View {
-        if let distribution = latencyMetrics[key] {
-            Text("\(label) P50 \(milliseconds(distribution.p50))ms · P90 \(milliseconds(distribution.p90))ms · P95 \(milliseconds(distribution.p95))ms · n=\(distribution.count)")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(textMuted)
-        }
-    }
-
-    private func milliseconds(_ seconds: Double) -> Int {
-        Int((seconds * 1_000).rounded())
-    }
-
-    private func availableCloudProviders() -> [(id: String, name: String)] {
-        dependencies.providers()
-    }
-
-    private func defaultModelPlaceholder() -> String {
-        switch cloudProviderId {
-        case "qwen-realtime":
-            return "qwen3-asr-flash-realtime"
-        default:
-            return "fun-asr-flash-8k-realtime"
-        }
-    }
-
-    private func loadConfig() {
-        let rawValue = dependencies.defaults.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
-        provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
-        cloudProviderId = dependencies.defaults.string(forKey: "cloud_speech_provider") ?? "qwen-realtime"
-        modelName = dependencies.defaults.string(forKey: "speech_model_name") ?? defaultModelPlaceholder()
-        workspaceID = dependencies.defaults.string(forKey: "speech_workspace_id") ?? ""
-        apiKey = ""
-        retryKey()
-        originalDraft = currentDraft
-    }
-
-    private func retryKey() {
-        do {
-            apiKey = try dependencies.readKey() ?? ""
-            // Only the key baseline changes; other unsaved fields remain dirty.
-            if originalDraft.indices.contains(2) { originalDraft[2] = apiKey }
-            keyLoadFailed = false; saveError = nil
-        } catch { keyLoadFailed = true; saveError = error.localizedDescription }
-    }
-
-    private func saveConfig() throws {
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyLoadFailed else {
-            throw ConfigurationError.unavailable("密钥读取失败，请先重试读取，避免覆盖原有密钥")
-        }
-        guard dependencies.saveKey(trimmedKey) else {
-            throw ConfigurationError.unavailable("语音识别密钥未保存，请解锁钥匙串后重试")
-        }
-        dependencies.defaults.set(provider.rawValue, forKey: "speechRecognitionProvider")
-        dependencies.defaults.set(cloudProviderId, forKey: "cloud_speech_provider")
-        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        dependencies.defaults.set(model.isEmpty ? defaultModelPlaceholder() : model, forKey: "speech_model_name")
-        let trimmedWorkspaceID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if QwenEndpointResolver.normalizedWorkspaceID(trimmedWorkspaceID) != nil {
-            dependencies.defaults.set(trimmedWorkspaceID, forKey: "speech_workspace_id")
-        } else {
-            dependencies.defaults.removeObject(forKey: "speech_workspace_id")
-            workspaceID = ""
-        }
-        dependencies.refreshConnection(provider)
-        originalDraft = currentDraft
-        saveError = nil
-        saved = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            saved = false
-        }
+    private func perform(_ action: () throws -> Void) { do { try action() } catch { editor.error = error.localizedDescription } }
+    private func field(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) { Text(title).font(.callout); TextField(title, text: text).textFieldStyle(.roundedBorder).accessibilityLabel(title) }
     }
 }
 

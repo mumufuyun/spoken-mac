@@ -79,6 +79,13 @@ protocol ConnectionKeyStore {
     func writeCredential(_ key: String, id: String) throws
     func removeCredential(_ id: String) throws
     func readLegacyCredential() throws -> String?
+    func readLegacyCredentialWithoutUI() throws -> String?
+}
+
+extension ConnectionKeyStore {
+    func readLegacyCredentialWithoutUI() throws -> String? {
+        throw ConfigurationError.unavailable("请在语音识别设置中重试读取旧配置与密钥")
+    }
 }
 
 final class ModelConnectionStore: ObservableObject {
