@@ -643,11 +643,10 @@ class RecordingViewModel: ObservableObject {
         switch frozenConfiguration! {
         case .success(let snapshot):
             displayStatus = snapshot.mode.name
-            isProcessing = snapshot.requiresAI
         case .failure:
             displayStatus = modeNameProvider()
-            isProcessing = true
         }
+        isProcessing = true
     }
 
     var onClose: (() -> Void)?
@@ -829,11 +828,6 @@ class RecordingViewModel: ObservableObject {
         switch frozenConfiguration! {
         case .failure(let error): finishAIProcessing(.failure(error), originalText: text)
         case .success(let snapshot):
-            if !snapshot.requiresAI {
-                isProcessing = false
-                onComplete?(text, frontmostApp)
-                return
-            }
             isProcessing = true
             processor.process(text: text, snapshot: snapshot) { [weak self] result in
                 DispatchQueue.main.async { self?.finishAIProcessing(result, originalText: text) }

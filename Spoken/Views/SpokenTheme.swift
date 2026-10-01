@@ -29,7 +29,7 @@ struct ModeGrid: View {
             if let raw = modes.first(where: { $0.builtin == .rawTranscript }) {
                 modeButton(raw)
             }
-            group("预设模式", modes: modes.filter { !$0.isCustom && $0.requiresAI })
+            group("预设模式", modes: modes.filter { !$0.isCustom && $0.builtin != .rawTranscript })
             HStack {
                 Text("自定义 · \(modes.filter(\.isCustom).count)/\(ModeStore.customLimit)")
                     .font(.caption).foregroundStyle(.secondary)

@@ -1,0 +1,66 @@
+[
+  {
+    "id": "T1",
+    "title": "极短·一句话指令",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "short",
+    "input": "帮我写一首关于秋天的诗。"
+  },
+  {
+    "id": "T2",
+    "title": "极短·翻译请求",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "short",
+    "input": "帮我把这段话翻译成英文。"
+  },
+  {
+    "id": "T3",
+    "title": "短·两句指令",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "short",
+    "input": "帮我看看这段代码有没有问题。主要是性能方面。"
+  },
+  {
+    "id": "T4",
+    "title": "极短·单词级请求",
+    "expected_scene": "AI指令",
+    "target_mode_id": "ai_instruction",
+    "length_class": "short",
+    "input": "给我推荐几本科幻小说。"
+  },
+  {
+    "id": "T5",
+    "title": "极短·日常聊天",
+    "expected_scene": "日常聊天",
+    "target_mode_id": "casual_chat",
+    "length_class": "short",
+    "input": "我今晚加班，晚点回。"
+  },
+  {
+    "id": "T6",
+    "title": "极短·工作沟通",
+    "expected_scene": "工作沟通",
+    "target_mode_id": "work_message",
+    "length_class": "short",
+    "input": "下午的会改到三点了。"
+  },
+  {
+    "id": "T7",
+    "title": "极短·内容分享",
+    "expected_scene": "内容分享",
+    "target_mode_id": "content_share",
+    "length_class": "short",
+    "input": "楼下的桂花开了，香。"
+  },
+  {
+    "id": "T8",
+    "title": "短·会议记录",
+    "expected_scene": "会议记录",
+    "target_mode_id": "meeting_notes",
+    "length_class": "short",
+    "input": "今天碰了一下，海报文案还没定，设计师说明天给三个版本。"
+  }
+]

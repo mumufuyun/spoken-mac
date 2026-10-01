@@ -8,7 +8,6 @@ struct ModeDefinition: Codable, Identifiable, Equatable {
     var builtin: WritingScene?
 
     var isCustom: Bool { builtin == nil }
-    var requiresAI: Bool { builtin != .rawTranscript }
     var icon: String { builtin?.settingsIcon ?? "slider.horizontal.3" }
 
     static func preset(_ scene: WritingScene) -> ModeDefinition {
@@ -25,7 +24,10 @@ extension ModeDefinition {
         name = try container.decode(String.self, forKey: .name)
         sceneRules = try container.decode(String.self, forKey: .sceneRules)
         let stored = try container.decodeIfPresent(String.self, forKey: .builtin)
-        builtin = WritingScene.allCases.first { $0.storageID == stored || $0.rawValue == stored }
+        builtin = WritingScene.allCases.first {
+            $0.storageID == stored || $0.rawValue == stored
+                || (stored == LegacyPromptsV4.rawTranscriptName && $0 == .rawTranscript)
+        }
         if stored != nil && builtin == nil {
             throw DecodingError.dataCorruptedError(forKey: .builtin, in: container, debugDescription: "Unknown built-in mode")
         }
@@ -40,7 +42,7 @@ extension ModeDefinition {
 }
 
 struct ModeConfiguration: Codable, Equatable {
-    var version = 3
+    var version = 6
     var baseRules = PromptComposer.defaultBaseRules
     var modes = WritingScene.allCases.map(ModeDefinition.preset)
     var selectedID = WritingScene.rawTranscript.storageID
@@ -81,8 +83,12 @@ final class ModeStore: ObservableObject {
     func reload() {
         do {
             if let saved = try file.read(ModeConfiguration.self) {
-                if saved.version == 2 {
-                    let migrated = Self.migratingV2(saved)
+                if saved.version == 2 || saved.version == 3 || saved.version == 4 || saved.version == 5 {
+                    var migrated = saved
+                    if migrated.version == 2 { migrated = Self.migratingV2(migrated) }
+                    if migrated.version == 3 { migrated = Self.migratingV3(migrated) }
+                    if migrated.version == 4 { migrated = Self.migratingV4(migrated) }
+                    if migrated.version == 5 { migrated = Self.migratingV5(migrated) }
                     try validate(migrated)
                     try file.save(migrated)
                     configuration = migrated
@@ -185,7 +191,10 @@ final class ModeStore: ObservableObject {
 
     private func legacySelection() -> String {
         let raw = defaults.string(forKey: WritingScene.defaultsKey)
-        if let scene = WritingScene.allCases.first(where: { $0.storageID == raw || $0.rawValue == raw }) {
+        if let scene = WritingScene.allCases.first(where: {
+            $0.storageID == raw || $0.rawValue == raw
+                || (raw == LegacyPromptsV4.rawTranscriptName && $0 == .rawTranscript)
+        }) {
             return scene.storageID
         }
         switch defaults.string(forKey: "spokenMode") {
@@ -212,8 +221,59 @@ final class ModeStore: ObservableObject {
         return next
     }
 
+    /// v3→v4：修复短输入过度解读的提示词迭代后，只刷新与 v3 默认值逐字一致（即从未被用户编辑过）的基础规则和内置场景规则。
+    private static func migratingV3(_ saved: ModeConfiguration) -> ModeConfiguration {
+        var next = saved
+        next.version = 4
+        if next.baseRules == LegacyPromptsV3.baseRules {
+            next.baseRules = PromptComposer.defaultBaseRules
+        }
+        next.modes = next.modes.map { mode in
+            guard let scene = mode.builtin, mode.sceneRules == LegacyPromptsV3.sceneRules(for: scene) else { return mode }
+            var refreshed = mode
+            refreshed.sceneRules = PromptComposer.defaultSceneRules(for: scene)
+            return refreshed
+        }
+        return next
+    }
+
+    /// v4→v5："原样转写"更名为"流畅转写"并改为 AI 轻量整理后，刷新从未被用户编辑过的场景规则与内置名称。
+    private static func migratingV4(_ saved: ModeConfiguration) -> ModeConfiguration {
+        var next = saved
+        next.version = 5
+        next.modes = next.modes.map { mode in
+            guard mode.builtin == .rawTranscript else { return mode }
+            var refreshed = mode
+            if refreshed.sceneRules == LegacyPromptsV4.rawTranscriptRules {
+                refreshed.sceneRules = PromptComposer.defaultSceneRules(for: .rawTranscript)
+            }
+            if refreshed.name == LegacyPromptsV4.rawTranscriptName {
+                refreshed.name = WritingScene.rawTranscript.rawValue
+            }
+            return refreshed
+        }
+        return next
+    }
+
+    /// v5→v6：忠实度迭代（隐性意向词保留、拼音缩写还原、会议进展归类、占位符禁止等）后，
+    /// 只刷新与 v5 默认值逐字一致（即从未被用户编辑过）的基础规则和内置场景规则。
+    private static func migratingV5(_ saved: ModeConfiguration) -> ModeConfiguration {
+        var next = saved
+        next.version = 6
+        if next.baseRules == LegacyPromptsV5.baseRules {
+            next.baseRules = PromptComposer.defaultBaseRules
+        }
+        next.modes = next.modes.map { mode in
+            guard let scene = mode.builtin, mode.sceneRules == LegacyPromptsV5.sceneRules(for: scene) else { return mode }
+            var refreshed = mode
+            refreshed.sceneRules = PromptComposer.defaultSceneRules(for: scene)
+            return refreshed
+        }
+        return next
+    }
+
     private func validate(_ value: ModeConfiguration) throws {
-        guard value.version == 3 else { throw ConfigurationError.invalid("模式配置版本不受支持，请保留原文件") }
+        guard value.version == 6 else { throw ConfigurationError.invalid("模式配置版本不受支持，请保留原文件") }
         guard !value.baseRules.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ConfigurationError.invalid("基础规则不能为空")
         }

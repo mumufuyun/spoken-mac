@@ -125,7 +125,7 @@ struct ModeSettingsView: View {
                 do { try editor.delete() }
                 catch { editor.error = error.localizedDescription }
             }
-        } message: { Text("此模式将被移除。若正在使用它，会切回原样转写；已开始处理的录音不受影响。") }
+        } message: { Text("此模式将被移除。若正在使用它，会切回流畅转写；已开始处理的录音不受影响。") }
     }
 
     private func row(_ mode: ModeDefinition) -> some View {

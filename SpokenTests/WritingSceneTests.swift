@@ -82,7 +82,7 @@ final class WritingSceneTests: XCTestCase {
     }
 
     func testEveryAISceneHasAConstrainedDefaultPrompt() {
-        for scene in WritingScene.allCases where scene.requiresAI {
+        for scene in WritingScene.allCases {
             let prompt = MiniMaxService.defaultPrompt(for: scene)
             XCTAssertTrue(prompt.contains("不得虚构"), "\(scene.rawValue) 缺少防虚构约束")
             XCTAssertTrue(prompt.contains("确定程度"), "\(scene.rawValue) 缺少事实边界约束")
@@ -92,31 +92,31 @@ final class WritingSceneTests: XCTestCase {
 
     func testHighRiskSceneConstraintsArePresent() {
         let workPrompt = MiniMaxService.defaultPrompt(for: .workMessage)
-        XCTAssertTrue(workPrompt.contains("只有原文包含明确诉求"))
-        XCTAssertTrue(workPrompt.contains("保持原有逻辑顺序"))
+        XCTAssertTrue(workPrompt.contains("原文有明确诉求、决定或需要对方响应的事项时予以突出"))
+        XCTAssertTrue(workPrompt.contains("负责人、时间和下一步仅原文明确时保留"))
 
         let meetingPrompt = MiniMaxService.defaultPrompt(for: .meetingNotes)
-        XCTAssertTrue(meetingPrompt.contains("建议、设想、倾向和提议"))
-        XCTAssertTrue(meetingPrompt.contains("才列为待办"))
-        XCTAssertTrue(meetingPrompt.contains("不得用“待办（建议/未明确负责人）”"))
-        XCTAssertTrue(meetingPrompt.contains("不得建议由谁跟进"))
+        XCTAssertTrue(meetingPrompt.contains("只有明确安排的行动才算待办"))
+        XCTAssertTrue(meetingPrompt.contains("建议和设想不是待办"))
+        XCTAssertTrue(meetingPrompt.contains("不强行套用分类模板"))
 
         let contentPrompt = MiniMaxService.defaultPrompt(for: .contentShare)
-        XCTAssertTrue(contentPrompt.contains("自行添加总结、评价、号召、展望或后续承诺"))
-        XCTAssertTrue(contentPrompt.contains("原文明确要求总结或收尾"))
-        XCTAssertTrue(contentPrompt.contains("不得推断或补写缺失的分析、判断和结论"))
+        XCTAssertTrue(contentPrompt.contains("不添加未经表达的经历、数据、观点或感受"))
+        XCTAssertTrue(contentPrompt.contains("不自行补写总结、号召或展望"))
+        XCTAssertTrue(contentPrompt.contains("保持原文的措辞和分寸"))
 
         let formalPrompt = MiniMaxService.defaultPrompt(for: .formalDocument)
-        XCTAssertTrue(formalPrompt.contains("不得为了材料完整而补充解释、意义、影响或推导结论"))
+        XCTAssertTrue(formalPrompt.contains("即使原文基本通顺，也要完成书面化"))
+        XCTAssertTrue(formalPrompt.contains("不补充原文没有的解释、意义或影响"))
     }
 
     func testAIInstructionPromptOrganizesWithoutExecuting() {
         let prompt = MiniMaxService.defaultPrompt(for: .aiInstruction)
-        XCTAssertTrue(prompt.contains("只整理指令"))
-        XCTAssertTrue(prompt.contains("不要回答问题、执行任务"))
-        XCTAssertTrue(prompt.contains("目标、背景、要求、输出"))
+        XCTAssertTrue(prompt.contains("不执行任务"))
+        XCTAssertTrue(prompt.contains("而不是一首诗"))
+        XCTAssertTrue(prompt.contains("短指令"))
         XCTAssertTrue(prompt.contains("不保留对 Spoken 的称呼"))
-        XCTAssertTrue(prompt.contains("建议仍是建议"))
+        XCTAssertTrue(prompt.contains("未明确说出的目标、动机和要求保持未说"))
     }
 
     func testAIResponseWrapperIsRemoved() {

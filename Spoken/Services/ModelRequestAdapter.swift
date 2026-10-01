@@ -64,15 +64,11 @@ struct AIProcessingSnapshot {
     let systemPrompt: String
     let connection: ModelConnection?
     let apiKey: String
-    var requiresAI: Bool { mode.requiresAI || language != .original }
 
     static func capture(modes: ModeStore, connections: ModelConnectionStore,
                         defaults: UserDefaults = .standard) throws -> AIProcessingSnapshot {
         let mode = modes.selected
         let language = TranslateLanguage(rawValue: defaults.string(forKey: "translateLang") ?? "") ?? .original
-        if !mode.requiresAI && language == .original {
-            return AIProcessingSnapshot(mode: mode, language: language, systemPrompt: "", connection: nil, apiKey: "")
-        }
         if let error = modes.loadError ?? connections.loadError { throw ConfigurationError.unavailable(error) }
         let enabled = defaults.object(forKey: PersonalContextStore.enabledKey) == nil || defaults.bool(forKey: PersonalContextStore.enabledKey)
         let prompt = PromptComposer.systemPrompt(mode: mode, baseRules: modes.configuration.baseRules,

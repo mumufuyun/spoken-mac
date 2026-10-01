@@ -7,7 +7,7 @@ enum PersonalContextStore {
 }
 
 enum WritingScene: String, CaseIterable, Codable, Identifiable {
-    case rawTranscript = "原样转写"
+    case rawTranscript = "流畅转写"
     case casualChat = "日常聊天"
     case workMessage = "工作沟通"
     case formalDocument = "正式材料"
@@ -16,8 +16,6 @@ enum WritingScene: String, CaseIterable, Codable, Identifiable {
     case aiInstruction = "AI 指令"
 
     var id: Self { self }
-
-    var requiresAI: Bool { self != .rawTranscript }
 
     var storageID: String {
         switch self {
@@ -48,7 +46,7 @@ enum WritingScene: String, CaseIterable, Codable, Identifiable {
     /// 设置页展示的一句用户说明，不暴露任何内部处理规则文本。
     var settingsDescription: String {
         switch self {
-        case .rawTranscript: return "原语言下直接使用识别文本，不调用 AI；指定输出语言时仅做翻译。"
+        case .rawTranscript: return "轻量整理识别文本：去除语气词、重复词句和简单语病，把口语变成通顺的书面表达，不做场景化改写。"
         case .casualChat: return "整理成发给熟人、家人或朋友的消息，保留你的语气和口语感。"
         case .workMessage: return "整理成简洁、明确、礼貌的工作消息，可发给同事、领导、客户或合作方。"
         case .formalDocument: return "整理成严谨、完整的书面材料，例如报告、方案、PRD 或汇报。"
@@ -65,8 +63,9 @@ enum WritingScene: String, CaseIterable, Codable, Identifiable {
             if let scene = allCases.first(where: { $0.storageID == stored }) {
                 return scene
             }
-            // 兼容旧版本以中文展示名称存储的值，并立即迁移为稳定标识。
-            if let scene = WritingScene(rawValue: stored) {
+            // 兼容旧版本以中文展示名称存储的值（含更名前的"原样转写"），并立即迁移为稳定标识。
+            if let scene = WritingScene(rawValue: stored)
+                ?? (stored == LegacyPromptsV4.rawTranscriptName ? .rawTranscript : nil) {
                 defaults.set(scene.storageID, forKey: defaultsKey)
                 return scene
             }

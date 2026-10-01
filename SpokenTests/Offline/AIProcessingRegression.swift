@@ -361,12 +361,13 @@ private struct AIProcessingRegression {
                 try check(prompt.contains("CUSTOM \(input)"), "Custom prompt ignored")
                 try check(prompt.contains("英文"), "Translation lost")
             }),
-            ("Raw transcription does not request AI or Keychain", {
-                MockProtocol.reset([])
+            ("Raw transcript requests AI light cleanup", {
+                MockProtocol.reset([.init(json: answer("整理后正文"))])
                 let f = Fixture()
-                let service = MiniMaxService(defaults: f.defaults, session: f.session, apiKeyProvider: { fatalError("Raw mode accessed Keychain") })
-                try check(try process(service, mode: .rawTranscript).get() == input, "Raw text changed")
-                try check(MockProtocol.requests.isEmpty, "Raw mode requested AI")
+                try check(try process(f.service(), mode: .rawTranscript).get() == "整理后正文", "Raw cleanup output wrong")
+                let messages = try body()["messages"] as! [[String: String]]
+                let prompt = messages.first { $0["role"] == "user" }!["content"]!
+                try check(prompt.contains("通顺的书面文本") && prompt.contains(input), "Raw cleanup rules or text missing")
             }),
             ("ViewModel retains original and exposes failure notice", {
                 let vm = RecordingViewModel()
@@ -487,7 +488,7 @@ private extension AIProcessingRegression {
                 try check(try f.file("modes").read(ModeConfiguration.self)!.version == 99, "Future version overwritten")
             }),
             ("Built-in scene rules preserve tasks while the common base allows generation", {
-                for scene in WritingScene.allCases where scene != .rawTranscript {
+                for scene in WritingScene.allCases {
                     let rules = PromptComposer.defaultSceneRules(for: scene)
                     try check(!rules.contains("{text}"), "Placeholder leaked into new scene")
                     try check(!rules.contains(AIProcessingService.sceneSafetyRules), "Legacy base duplicated")
@@ -496,11 +497,14 @@ private extension AIProcessingRegression {
                 let instruction = PromptComposer.defaultSceneRules(for: .aiInstruction)
                 try check(instruction.contains("可直接执行指令") && instruction.contains("让目标 AI 无需再次拆解"), "AI instruction task changed")
                 try check(instruction.contains("未明确说出的目标、动机和要求保持未说"), "Instruction boundary missing")
+                try check(instruction.contains("而不是一首诗") && instruction.contains("不追加代码占位符或分析清单"), "Short-instruction anti-execution anchor missing")
                 try check(PromptComposer.defaultSceneRules(for: .meetingNotes).contains("建议和设想不是待办"), "Meeting boundary missing")
-                try check(PromptComposer.defaultSceneRules(for: .meetingNotes).contains("不直接照抄"), "Meeting fallback missing")
+                try check(PromptComposer.defaultSceneRules(for: .meetingNotes).contains("不强行套用分类模板"), "Short meeting template fallback missing")
                 try check(PromptComposer.defaultSceneRules(for: .contentShare).contains("分开呈现"), "Share layering missing")
+                try check(PromptComposer.defaultSceneRules(for: .contentShare).contains("保持原文的措辞和分寸"), "Short share restraint missing")
                 try check(PromptComposer.defaultSceneRules(for: .formalDocument).contains("即使原文基本通顺"), "Document processing weakened")
                 try check(PromptComposer.defaultBaseRules.contains("整理必须实际做到位") && PromptComposer.defaultBaseRules.contains("底线是不编内容"), "Base balance missing")
+                try check(PromptComposer.defaultBaseRules.contains("短输入") && PromptComposer.defaultBaseRules.contains("保持原有措辞、语气和长度"), "Short-input minimal-edit clause missing")
                 let mode = ModeDefinition(id: UUID().uuidString, name: "问答", sceneRules: "直接回答问题")
                 let result = PromptComposer.systemPrompt(mode: mode, baseRules: "共同规则", language: .japanese, personalContext: "称呼：不该注入的名字\n领域：测试")
                 try check(result.contains("直接回答问题") && result.contains("领域：测试"), "Custom mode lost user rules or personal context")
@@ -515,6 +519,53 @@ private extension AIProcessingRegression {
                 try check(LegacyPromptsV2.sceneRules(for: .aiInstruction).hasSuffix("不补写事实、观点或行动项。"), "Legacy suffix wrong")
                 try check(LegacyPromptsV2.baseRules.contains("中英混合识别") && LegacyPromptsV2.baseRules != PromptComposer.defaultBaseRules, "Legacy base rules drifted")
             }),
+            ("Legacy v3 constants match the pre-short-input-fix defaults", {
+                try check(LegacyPromptsV3.baseRules.contains("不整段照抄口语原文充数") && !LegacyPromptsV3.baseRules.contains("短输入"), "Legacy v3 base rules drifted")
+                try check(LegacyPromptsV3.sceneRules(for: .aiInstruction).contains("把指令整理到可直接执行的程度"), "Legacy v3 AI rules drifted")
+                try check(LegacyPromptsV3.sceneRules(for: .meetingNotes).contains("也用清晰要点整理，不直接照抄"), "Legacy v3 meeting rules drifted")
+                try check(LegacyPromptsV3.sceneRules(for: .contentShare).contains("不自行补写总结、号召或展望"), "Legacy v3 share rules drifted")
+                try check(LegacyPromptsV3.sceneRules(for: .casualChat) != PromptComposer.defaultSceneRules(for: .casualChat), "v6 iteration must refresh casual chat rules")
+                try check(LegacyPromptsV3.baseRules != PromptComposer.defaultBaseRules
+                    && LegacyPromptsV3.sceneRules(for: .aiInstruction) != PromptComposer.defaultSceneRules(for: .aiInstruction), "v3 and v4 defaults must differ where fixed")
+            }),
+            ("v3 configuration refreshes untouched built-in rules and preserves user edits", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 3
+                legacy.baseRules = LegacyPromptsV3.baseRules
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                                   sceneRules: LegacyPromptsV3.sceneRules(for: scene), builtin: scene)
+                }
+                let customText = "我自己改过的指令规则"
+                legacy.modes[legacy.modes.firstIndex { $0.builtin == .aiInstruction }!].sceneRules = customText
+                legacy.selectedID = WritingScene.meetingNotes.storageID
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v3 migration did not complete")
+                try check(f.modes.configuration.baseRules == PromptComposer.defaultBaseRules, "Base rules not refreshed")
+                try check(f.modes.selected.builtin == .meetingNotes, "Selection lost")
+                try check(f.modes.modes.first { $0.builtin == .contentShare }!.sceneRules == PromptComposer.defaultSceneRules(for: .contentShare), "Untouched v3 rules not refreshed")
+                try check(f.modes.modes.first { $0.builtin == .aiInstruction }!.sceneRules == customText, "User edit overwritten")
+                try check(try f.file("modes").read(ModeConfiguration.self)!.version == 6, "v3 migration not persisted")
+            }),
+            ("Failed v3 migration leaves the original file intact for retry", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 3
+                legacy.baseRules = LegacyPromptsV3.baseRules
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                                   sceneRules: LegacyPromptsV3.sceneRules(for: scene), builtin: scene)
+                }
+                try f.file("modes").save(legacy)
+                f.failingFiles.insert("modes")
+                try check(f.modes.loadError != nil, "v3 migration failure hidden")
+                let persisted = try f.file("modes").read(ModeConfiguration.self)!
+                try check(persisted.version == 3 && persisted.baseRules == LegacyPromptsV3.baseRules, "Failed v3 migration overwrote file")
+                f.failingFiles = []
+                f.modes.reload()
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v3 retry failed")
+            }),
             ("v2 configuration refreshes untouched built-in rules and preserves user edits", {
                 let f = ConfigurationFixture()
                 var legacy = ModeConfiguration()
@@ -528,12 +579,12 @@ private extension AIProcessingRegression {
                 legacy.modes[legacy.modes.firstIndex { $0.builtin == .aiInstruction }!].sceneRules = customText
                 legacy.selectedID = WritingScene.workMessage.storageID
                 try f.file("modes").save(legacy)
-                try check(f.modes.loadError == nil && f.modes.configuration.version == 3, "Migration did not complete")
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "Migration did not complete")
                 try check(f.modes.configuration.baseRules == PromptComposer.defaultBaseRules, "Base rules not refreshed")
                 try check(f.modes.selected.builtin == .workMessage, "Selection lost")
                 try check(f.modes.modes.first { $0.builtin == .casualChat }!.sceneRules == PromptComposer.defaultSceneRules(for: .casualChat), "Untouched rules not refreshed")
                 try check(f.modes.modes.first { $0.builtin == .aiInstruction }!.sceneRules == customText, "User edit overwritten")
-                try check(try f.file("modes").read(ModeConfiguration.self)!.version == 3, "Migration not persisted")
+                try check(try f.file("modes").read(ModeConfiguration.self)!.version == 6, "Migration not persisted")
             }),
             ("Failed v2 migration leaves the original file intact for retry", {
                 let f = ConfigurationFixture()
@@ -551,7 +602,121 @@ private extension AIProcessingRegression {
                 try check(persisted.version == 2 && persisted.baseRules == LegacyPromptsV2.baseRules, "Failed migration overwrote file")
                 f.failingFiles = []
                 f.modes.reload()
-                try check(f.modes.loadError == nil && f.modes.configuration.version == 3, "Retry failed")
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "Retry failed")
+            }),
+            ("Legacy v4 constants match the pre-rename raw transcript defaults", {
+                try check(LegacyPromptsV4.rawTranscriptName == "原样转写", "Legacy v4 raw name drifted")
+                try check(LegacyPromptsV4.rawTranscriptRules.contains("保留原始转录"), "Legacy v4 raw rules drifted")
+                try check(LegacyPromptsV4.rawTranscriptRules != PromptComposer.defaultSceneRules(for: .rawTranscript), "v4 and v5 raw rules must differ")
+            }),
+            ("v4 configuration refreshes untouched raw transcript rules and name, preserves user edits", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 4
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID,
+                                   name: scene == .rawTranscript ? LegacyPromptsV4.rawTranscriptName : scene.rawValue,
+                                   sceneRules: scene == .rawTranscript ? LegacyPromptsV4.rawTranscriptRules : PromptComposer.defaultSceneRules(for: scene),
+                                   builtin: scene)
+                }
+                let customText = "我自己改过的聊天规则"
+                legacy.modes[legacy.modes.firstIndex { $0.builtin == .casualChat }!].sceneRules = customText
+                legacy.selectedID = WritingScene.meetingNotes.storageID
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v4 migration did not complete")
+                let raw = f.modes.modes.first { $0.builtin == .rawTranscript }!
+                try check(raw.name == WritingScene.rawTranscript.rawValue, "v4 raw mode not renamed")
+                try check(raw.sceneRules == PromptComposer.defaultSceneRules(for: .rawTranscript), "Untouched v4 raw rules not refreshed")
+                try check(f.modes.modes.first { $0.builtin == .casualChat }!.sceneRules == customText, "User edit overwritten")
+                try check(f.modes.selected.builtin == .meetingNotes, "Selection lost")
+                try check(try f.file("modes").read(ModeConfiguration.self)!.version == 6, "v4 migration not persisted")
+            }),
+            ("v4 migration preserves user-edited raw transcript rules", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 4
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID,
+                                   name: scene == .rawTranscript ? LegacyPromptsV4.rawTranscriptName : scene.rawValue,
+                                   sceneRules: scene == .rawTranscript ? LegacyPromptsV4.rawTranscriptRules : PromptComposer.defaultSceneRules(for: scene),
+                                   builtin: scene)
+                }
+                let customText = "逐字输出，不要任何处理"
+                legacy.modes[legacy.modes.firstIndex { $0.builtin == .rawTranscript }!].sceneRules = customText
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v4 migration did not complete")
+                let raw = f.modes.modes.first { $0.builtin == .rawTranscript }!
+                try check(raw.sceneRules == customText, "User-edited raw rules overwritten")
+                try check(raw.name == WritingScene.rawTranscript.rawValue, "Edited raw mode not renamed")
+            }),
+            ("Failed v4 migration leaves the original file intact for retry", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 4
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID,
+                                   name: scene == .rawTranscript ? LegacyPromptsV4.rawTranscriptName : scene.rawValue,
+                                   sceneRules: scene == .rawTranscript ? LegacyPromptsV4.rawTranscriptRules : PromptComposer.defaultSceneRules(for: scene),
+                                   builtin: scene)
+                }
+                try f.file("modes").save(legacy)
+                f.failingFiles.insert("modes")
+                try check(f.modes.loadError != nil, "v4 migration failure hidden")
+                let persisted = try f.file("modes").read(ModeConfiguration.self)!
+                try check(persisted.version == 4 && persisted.modes.first { $0.builtin == .rawTranscript }!.name == LegacyPromptsV4.rawTranscriptName, "Failed v4 migration overwrote file")
+                f.failingFiles = []
+                f.modes.reload()
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v4 retry failed")
+            }),
+            ("Legacy v5 constants match the pre-fidelity-iteration defaults", {
+                try check(LegacyPromptsV5.baseRules.contains("且整理深度与原文匹配") && !LegacyPromptsV5.baseRules.contains("好像"), "Legacy v5 base rules drifted")
+                try check(LegacyPromptsV5.sceneRules(for: .workMessage).contains("负责人、时间和下一步仅原文明确时保留") && !LegacyPromptsV5.sceneRules(for: .workMessage).contains("阿皮哎"), "Legacy v5 work rules drifted")
+                try check(LegacyPromptsV5.sceneRules(for: .meetingNotes).contains("建议和设想不是待办") && !LegacyPromptsV5.sceneRules(for: .meetingNotes).contains("关键进展与讨论"), "Legacy v5 meeting rules drifted")
+                try check(LegacyPromptsV5.rawTranscriptRules.contains("按语义自然分段") && !LegacyPromptsV5.rawTranscriptRules.contains("自我更正"), "Legacy v5 raw rules drifted")
+                try check(LegacyPromptsV5.baseRules != PromptComposer.defaultBaseRules, "v5 and v6 base rules must differ")
+                for scene in WritingScene.allCases {
+                    try check(LegacyPromptsV5.sceneRules(for: scene) != PromptComposer.defaultSceneRules(for: scene), "v5 and v6 rules must differ for \(scene.rawValue)")
+                }
+            }),
+            ("v5 configuration refreshes untouched built-in rules and preserves user edits", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 5
+                legacy.baseRules = LegacyPromptsV5.baseRules
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                                   sceneRules: LegacyPromptsV5.sceneRules(for: scene), builtin: scene)
+                }
+                let customText = "我自己改过的指令规则"
+                legacy.modes[legacy.modes.firstIndex { $0.builtin == .aiInstruction }!].sceneRules = customText
+                legacy.selectedID = WritingScene.meetingNotes.storageID
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v5 migration did not complete")
+                try check(f.modes.configuration.baseRules == PromptComposer.defaultBaseRules, "Base rules not refreshed")
+                try check(f.modes.selected.builtin == .meetingNotes, "Selection lost")
+                for scene in WritingScene.allCases where scene != .aiInstruction {
+                    try check(f.modes.modes.first { $0.builtin == scene }!.sceneRules == PromptComposer.defaultSceneRules(for: scene), "Untouched v5 rules not refreshed for \(scene.rawValue)")
+                }
+                try check(f.modes.modes.first { $0.builtin == .aiInstruction }!.sceneRules == customText, "User edit overwritten")
+                try check(try f.file("modes").read(ModeConfiguration.self)!.version == 6, "v5 migration not persisted")
+            }),
+            ("Failed v5 migration leaves the original file intact for retry", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 5
+                legacy.baseRules = LegacyPromptsV5.baseRules
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                                   sceneRules: LegacyPromptsV5.sceneRules(for: scene), builtin: scene)
+                }
+                try f.file("modes").save(legacy)
+                f.failingFiles.insert("modes")
+                try check(f.modes.loadError != nil, "v5 migration failure hidden")
+                let persisted = try f.file("modes").read(ModeConfiguration.self)!
+                try check(persisted.version == 5 && persisted.baseRules == LegacyPromptsV5.baseRules, "Failed v5 migration overwrote file")
+                f.failingFiles = []
+                f.modes.reload()
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 6, "v5 retry failed")
             }),
             ("Clean connection installation never reads legacy Keychain", {
                 let f = ConfigurationFixture(); f.keys.failRead = true
@@ -672,16 +837,15 @@ private extension AIProcessingRegression {
                 try check(!messages[0]["content"]!.contains(input) && messages[0]["content"] == PromptComposer.enforcingOutputContract(PromptComposer.defaultCustomRules) && !messages[0]["content"]!.contains("共同规则"), "System prompt incorrect")
                 try check(sent["max_tokens"] as? Int == 8192 && sent["temperature"] == nil, "Custom generation uses short-input budget or invalid Kimi temperature")
             }),
-            ("Raw snapshot bypasses prompt and key reads; translation still requests AI", {
+            ("Raw transcript snapshot composes light-cleanup prompt; translation adds output language", {
                 let f = ConfigurationFixture()
-                f.keys.failRead = true
-                let raw = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
-                try check(!raw.requiresAI && raw.apiKey.isEmpty && f.keys.reads == 0, "Raw snapshot touched keys")
-                f.keys.failRead = false
                 _ = try f.connections.save(.preset(.qwen), key: "test")
+                let raw = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
+                try check(raw.mode.builtin == .rawTranscript && raw.systemPrompt.contains("通顺的书面文本"), "Raw cleanup prompt missing")
+                try check(raw.apiKey == "test" && f.keys.reads > 0, "Raw snapshot skipped key read")
                 f.defaults.set(TranslateLanguage.english.rawValue, forKey: "translateLang")
                 let translated = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
-                try check(translated.requiresAI && translated.systemPrompt.contains("英文") && translated.systemPrompt.contains("仅在指定输出语言"), "Raw translation path lost")
+                try check(translated.systemPrompt.contains("最终输出语言必须是英文") && translated.systemPrompt.contains("通顺的书面文本"), "Raw translation path lost")
             }),
             ("Stop captures all settings before ASR finishes; retry never rereads edited or deleted configuration", {
                 let c = ConfigurationFixture([PersonalContextStore.contextKey: "领域：OLD-CONTEXT"])
@@ -720,6 +884,7 @@ private extension AIProcessingRegression {
                 let vm = RecordingViewModel(snapshotProvider: { captures += 1; return snapshot }, modeNameProvider: { "raw" }, stopCapture: {}, cancelCapture: {})
                 vm.onComplete = { _, _ in outputs += 1 }
                 vm.processAndInput(input); vm.processAndInput(input)
+                spin(1, until: { outputs == 1 })
                 try check(captures == 1 && outputs == 1, "Automatic finish repeated snapshot or output")
                 vm.cancel()
                 vm.finishAIProcessing(.success("迟到"), originalText: input)
@@ -910,7 +1075,7 @@ private extension AIProcessingRegression {
                 var result: String?
                 vm.onComplete = { text, _ in result = text }
                 vm.captureStopped(); vm.processAndInput(input)
-                try check(result == input && captures == 1 && vm.displayStatus == "原样转写", "Delayed ASR captured later settings")
+                try check(result == input && captures == 1 && vm.displayStatus == "流畅转写", "Delayed ASR captured later settings")
             }),
             ("Empty ASR and cancellation emit no text and close once", {
                 var captures = 0; var closes = 0; var outputs = 0
