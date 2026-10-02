@@ -71,8 +71,9 @@
   "native_ui": "light/dark/minimum-size rendered and inspected",
   "local_app_build": "passed; Command Line Tools; ad-hoc app signature",
   "dmg_integrity": "passed",
-  "production_feed_signed": false,
+  "production_feed_signed": true,
   "website_deployed": false,
-  "blocker": "Mac locked; generate_appcast blocked in SecItemCopyMatching waiting for login Keychain authorization. Signing process stopped; retry after unlock.",
-  "xcode_archive": "not run; full Xcode and Developer ID unavailable"
+  "blocker": null,
+  "xcode_archive": "not run; full Xcode and Developer ID unavailable",
+  "release_status": "Signed locally; publication verification pending"
 }
