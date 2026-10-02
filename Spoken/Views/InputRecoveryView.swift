@@ -25,6 +25,7 @@ struct InputRecoveryView: View {
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark").foregroundStyle(.secondary) }
                     .buttonStyle(.plain).accessibilityLabel("关闭找回页面").help("关闭 · Esc")
+                    .keyboardShortcut(.cancelAction)
             }
             HStack {
                 Text("上次输入").font(.callout.weight(.semibold))

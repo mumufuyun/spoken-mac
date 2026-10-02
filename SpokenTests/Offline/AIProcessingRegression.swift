@@ -1014,7 +1014,8 @@ private extension AIProcessingRegression {
         _ = try fixture.connections.save(.preset(.qwen), key: "synthetic-smoke-key")
         _ = try fixture.connections.save(.preset(.minimax), key: "synthetic-minimax-key")
         let transport = Fixture()
-        MockProtocol.reset(Array(repeating: .init(json: answer("OK · 本地模拟结果"), delay: 0.3), count: 100))
+        // Leave time to exercise cancellation and the disabled scene picker in the interactive harness.
+        MockProtocol.reset(Array(repeating: .init(json: answer("OK · 本地模拟结果"), delay: 15), count: 100))
         let service = AIProcessingService(defaults: fixture.defaults, session: transport.session, recordsMetrics: false, log: { _ in })
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -1459,6 +1460,7 @@ private struct InteractiveSmokeView: View {
     @State private var failWrites = false
     @State private var failSpeechKeyRead = false
     @State private var recoveryPanel: InputRecoveryPanel?
+    @State private var recoveryStore: InputRecoveryStore?
 
     private var speechDependencies: SpeechSettingsDependencies {
         fixture.keys.failRead = failSpeechKeyRead
@@ -1513,11 +1515,14 @@ private struct InteractiveSmokeView: View {
     @MainActor
     private func showRecovery() {
         recoveryPanel?.orderOut(nil)
-        let recovery = InputRecoveryStore(modes: fixture.modes, processor: service,
+        let recovery = recoveryStore ?? InputRecoveryStore(modes: fixture.modes, processor: service,
             snapshotProvider: { id in
                 try AIProcessingSnapshot.capture(modes: fixture.modes, connections: fixture.connections, defaults: fixture.defaults, modeID: id)
             }, canStart: { true }, copyText: { value in output = "复制检查：" + value; return true })
-        recovery.capture("嗯那个评审改到周五下午三点吧，方案我明天发，预算这块先别定，还得等财务确认。")
+        if recovery.entry == nil {
+            recovery.capture("嗯那个评审改到周五下午三点吧，方案我明天发，预算这块先别定，还得等财务确认。")
+        }
+        recoveryStore = recovery
         recovery.prepareForPresentation()
         let panel = InputRecoveryPanel(contentRect: NSRect(origin: .zero, size: InputRecoveryView.size),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -1543,6 +1548,8 @@ private struct InteractiveSmokeView: View {
         }, cancelCapture: {})
         reference.value = vm
         vm.isRecording = true; vm.isCaptureReady = true
+        vm.hasRecoverableInput = true
+        vm.onRecover = { reference.value?.cancel(); showRecovery() }
         vm.statusText = "这是一段合成语音，用于验证模式切换和停止处理。"
         vm.onCancel = { output = "已取消"; showingRecording = false }
         vm.onComplete = { text, _ in output = text; showingRecording = false }
