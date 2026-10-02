@@ -227,7 +227,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: return "设置顺手的组合，随时开始表达。"
         case .permissions: return "确认自动输入权限，完成授权后即可直接填入输入框。"
         case .speech: return "选择适合你的语音识别方式。"
-        case .context: return "帮助模型理解你的术语和表达习惯。"
+        case .context: return "补充常用术语和表达习惯，帮助 AI 更准确地整理你的话。"
         case .updates: return "获取新功能和修复，保留已有设置。"
         }
     }
@@ -298,7 +298,7 @@ struct SettingsView: View {
                     case .shortcuts: HotKeySettingsView(service: hotkeys, navigation: navigation)
                     case .permissions: AccessibilitySettingsView(service: accessibility, navigation: navigation)
                     case .speech: SpeechConfigSectionView(navigation: navigation, dependencies: speechDependencies).padding(24)
-                    case .context: PersonalSettingsView(navigation: navigation, defaults: defaults).padding(24)
+                    case .context: PersonalSettingsView(navigation: navigation, defaults: defaults)
                     case .updates: UpdateSettingsView(updates: .shared, navigation: navigation)
                     }
                 }.id(section)
@@ -315,41 +315,143 @@ struct SettingsView: View {
     }
 }
 
+final class PersonalContextEditor: ObservableObject {
+    @Published var profile: PersonalContextProfile
+    @Published var enabled: Bool
+    @Published private(set) var saved = false
+    private var originalProfile: PersonalContextProfile
+    private var originalEnabled: Bool
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        let profile = PersonalContextStore.load(from: defaults)
+        let enabled = defaults.object(forKey: PersonalContextStore.enabledKey) == nil
+            || defaults.bool(forKey: PersonalContextStore.enabledKey)
+        self.profile = profile; originalProfile = profile
+        self.enabled = enabled; originalEnabled = enabled
+    }
+
+    var isDirty: Bool { profile != originalProfile || enabled != originalEnabled }
+
+    func save() {
+        PersonalContextStore.save(profile, enabled: enabled, to: defaults)
+        originalProfile = profile; originalEnabled = enabled; saved = true
+    }
+
+    func discard() {
+        profile = originalProfile; enabled = originalEnabled; saved = false
+    }
+
+    func clear() { profile = PersonalContextProfile(); saved = false }
+}
+
 struct PersonalSettingsView: View {
     let navigation: SettingsNavigationGuard
-    var defaults: UserDefaults = .standard
-    @State private var text = ""
-    @State private var enabled = true
-    @State private var originalText = ""
-    @State private var originalEnabled = true
-    @State private var saved = false
+    @StateObject private var editor: PersonalContextEditor
+    @State private var notesExpanded: Bool
+    @State private var previewExpanded = false
+
+    init(navigation: SettingsNavigationGuard, defaults: UserDefaults = .standard) {
+        self.navigation = navigation
+        let editor = PersonalContextEditor(defaults: defaults)
+        _editor = StateObject(wrappedValue: editor)
+        _notesExpanded = State(initialValue: !editor.profile.notes.isEmpty)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Toggle("在 AI 处理中使用个人背景", isOn: $enabled)
-            RuleEditor(title: "术语与表达偏好", detail: "启用后随需要 AI 处理的文本发送给当前模型。仅用于理解术语和语气，不补写事实。", text: $text)
-            HStack {
-                Button("清空") { text = ""; saved = false }
-                Spacer()
-                if saved { Text("已保存").font(.callout).foregroundStyle(.secondary) }
-                Button("保存", action: save).buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("在 AI 处理中使用个人背景", isOn: $editor.enabled)
+                        Text(editor.enabled
+                             ? "保存在本机；启用并保存后，会随需要 AI 处理的文本发送给当前模型服务商。"
+                             : "保存后暂停使用，已填写的内容仍保留在本机。")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("从容易识别错的词开始").font(.headline)
+                        Text("每项写一两句即可，全部选填。只写与日常表达有关的信息，不必填写完整履历。")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 14, alignment: .top)], spacing: 14) {
+                        contextField("常用术语", icon: "textformat.abc",
+                                     detail: "写正确名称和常见误识别，帮助 AI 结合语境纠错。",
+                                     example: "例如：Spoken（语音输入工具），常被识别成“斯波肯”；API 保留大写。",
+                                     text: $editor.profile.terms)
+                        contextField("工作或专业领域", icon: "briefcase",
+                                     detail: "写你从事的领域和常做的事，帮助 AI 理解专业含义。",
+                                     example: "例如：我做软件产品设计，经常讨论用户访谈、交互和版本迭代。",
+                                     text: $editor.profile.role)
+                        contextField("沟通对象与用途", icon: "person.2",
+                                     detail: "写通常给谁、用来做什么，帮助 AI 把握语气。",
+                                     example: "例如：常给项目同事发进度消息，也会把口述整理成内部说明。",
+                                     text: $editor.profile.audience)
+                        contextField("表达偏好", icon: "text.alignleft",
+                                     detail: "写具体习惯，例如句式、分段和要避免的表达。",
+                                     example: "例如：用短句，有多个事项时分点；保留专业术语，不加客套结尾。",
+                                     text: $editor.profile.style)
+                    }
+                    DisclosureGroup(isExpanded: $notesExpanded) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("补充其他与日常表达有关的信息。原有背景也保留在这里，可继续使用或自行分类。")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            TextEditor(text: $editor.profile.notes)
+                                .font(.system(size: 13)).scrollContentBackground(.hidden)
+                                .padding(10).frame(height: 140)
+                                .background(SpokenTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(SpokenTheme.border))
+                                .accessibilityLabel("其他补充，选填")
+                        }.padding(.top, 10)
+                    } label: {
+                        Text(editor.profile.notes.isEmpty ? "其他补充（选填）" : "其他补充（含已填写内容）")
+                            .font(.callout.weight(.medium))
+                    }
+                    Text("背景仅辅助理解，不用于补写事实；本次表达和所选模式的要求优先。")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if !editor.profile.isEmpty {
+                        DisclosureGroup("查看已填写的背景", isExpanded: $previewExpanded) {
+                            Text(editor.profile.promptText).font(.callout).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                        }.font(.callout)
+                    }
+                }.padding(24)
             }
+            Divider()
+            HStack {
+                Button("清空内容", action: editor.clear).disabled(editor.profile.isEmpty)
+                Spacer()
+                if editor.isDirty {
+                    Text("未保存").font(.callout).foregroundStyle(.secondary)
+                } else if editor.saved {
+                    Text(editor.enabled ? "已保存，用于后续录音" : "已保存，已暂停使用背景")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Button("保存", action: editor.save)
+                    .buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command)
+            }.padding(.horizontal, 24).padding(.vertical, 16)
         }
         .onAppear {
-            load()
-            navigation.install(isDirty: { text != originalText || enabled != originalEnabled }, save: save, discard: load)
+            navigation.install(isDirty: { editor.isDirty }, save: editor.save, discard: editor.discard)
         }
-        .onChange(of: text) { _, _ in saved = false }
-        .onChange(of: enabled) { _, _ in saved = false }
     }
-    private func load() {
-        text = defaults.string(forKey: PersonalContextStore.contextKey) ?? ""
-        enabled = defaults.object(forKey: PersonalContextStore.enabledKey) == nil
-            || defaults.bool(forKey: PersonalContextStore.enabledKey)
-        originalText = text; originalEnabled = enabled
-    }
-    private func save() {
-        defaults.set(text, forKey: PersonalContextStore.contextKey)
-        defaults.set(enabled, forKey: PersonalContextStore.enabledKey)
-        originalText = text; originalEnabled = enabled; saved = true
+
+    private func contextField(_ title: String, icon: String, detail: String, example: String,
+                              text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon).font(.headline)
+            Text(detail).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField(title, text: text, prompt: Text(example).foregroundStyle(.secondary), axis: .vertical)
+                .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(3...5)
+                .padding(10)
+                .background(SpokenTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(SpokenTheme.border))
+                .accessibilityLabel(title + "，选填").accessibilityHint(detail + example)
+                .help(example)
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 12))
     }
 }

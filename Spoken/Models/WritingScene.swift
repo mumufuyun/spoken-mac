@@ -4,6 +4,53 @@ import Foundation
 enum PersonalContextStore {
     static let contextKey = "personalContext"
     static let enabledKey = "personalContextEnabled"
+    static let profileKey = "personalContextProfile.v1"
+
+    static func load(from defaults: UserDefaults) -> PersonalContextProfile {
+        let text = defaults.string(forKey: contextKey) ?? ""
+        if let values = defaults.dictionary(forKey: profileKey) as? [String: String],
+           let terms = values["terms"], let role = values["role"],
+           let audience = values["audience"], let style = values["style"], let notes = values["notes"] {
+            let profile = PersonalContextProfile(terms: terms, role: role, audience: audience, style: style, notes: notes)
+            // Older builds can still edit the plain-text value. Never restore stale fields over it.
+            if profile.promptText == text { return profile }
+        }
+        // Keep existing free-form content verbatim; do not guess how to categorize it.
+        return PersonalContextProfile(notes: text)
+    }
+
+    static func save(_ profile: PersonalContextProfile, enabled: Bool, to defaults: UserDefaults) {
+        defaults.set(["terms": profile.terms, "role": profile.role, "audience": profile.audience,
+                      "style": profile.style, "notes": profile.notes], forKey: profileKey)
+        // The existing request paths and older builds continue to consume this value.
+        defaults.set(profile.promptText, forKey: contextKey)
+        defaults.set(enabled, forKey: enabledKey)
+    }
+}
+
+struct PersonalContextProfile: Equatable {
+    var terms = ""
+    var role = ""
+    var audience = ""
+    var style = ""
+    var notes = ""
+
+    var promptText: String {
+        let fields = [("常用术语", terms), ("工作或专业领域", role),
+                      ("沟通对象与用途", audience), ("表达偏好", style)]
+        var sections = fields.compactMap { title, value -> String? in
+            let content = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return content.isEmpty ? nil : "【\(title)】\n\(content)"
+        }
+        // Opening and saving an old profile must not rewrite its original text.
+        if sections.isEmpty { return notes }
+        if !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sections.append("【其他补充】\n\(notes)")
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
+    var isEmpty: Bool { promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }
 
 enum WritingScene: String, CaseIterable, Codable, Identifiable {

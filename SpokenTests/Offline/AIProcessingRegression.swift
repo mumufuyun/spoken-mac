@@ -424,7 +424,7 @@ private struct AIProcessingRegression {
                 vm.finishAIProcessing(.success("迟到正文"), originalText: input)
                 try check(outputs.count == count, "Cancelled ViewModel emitted text")
             })
-        ] + configurationTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests()
+        ] + configurationTests() + personalContextTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests()
         var failures = 0
         for (name, test) in tests {
             do { try test(); print("PASS: \(name)") }
@@ -440,6 +440,106 @@ private struct AIProcessingRegression {
 }
 
 private extension AIProcessingRegression {
+    @MainActor
+    static func personalContextTests() -> [(String, () throws -> Void)] {
+        [
+            ("Personal context preserves legacy content and disabled state without writing on open", {
+                let legacy = "  领域：合成测试\n称呼：测试者\n\n保留原有格式。\n"
+                let defaults = MemoryDefaults([PersonalContextStore.contextKey: legacy,
+                                               PersonalContextStore.enabledKey: false])
+                let editor = PersonalContextEditor(defaults: defaults)
+                try check(editor.profile.notes == legacy && editor.profile.terms.isEmpty && !editor.enabled,
+                          "Legacy content was guessed, changed or enabled")
+                try check(!editor.isDirty && defaults.object(forKey: PersonalContextStore.profileKey) == nil,
+                          "Opening settings migrated storage or created a dirty draft")
+                editor.save()
+                try check(defaults.string(forKey: PersonalContextStore.contextKey) == legacy,
+                          "Saving an unchanged legacy profile rewrote it")
+                try check(PersonalContextStore.load(from: defaults) == editor.profile && !editor.enabled,
+                          "Legacy profile failed to round-trip")
+            }),
+            ("Structured personal context round-trips and omits empty sections", {
+                let defaults = MemoryDefaults([:])
+                let editor = PersonalContextEditor(defaults: defaults)
+                try check(editor.profile.isEmpty && editor.enabled, "Clean profile contains example data")
+                editor.profile = PersonalContextProfile(terms: "  QuartzFlow：项目名称\n", role: " \n",
+                                                        audience: "同事", style: "短句", notes: "原有补充\n")
+                try check(defaults.string(forKey: PersonalContextStore.contextKey) == nil,
+                          "Draft leaked into live requests")
+                editor.save()
+                let reloaded = PersonalContextEditor(defaults: defaults)
+                try check(reloaded.profile == editor.profile && !reloaded.isDirty, "Structured fields lost on reload")
+                let prompt = defaults.string(forKey: PersonalContextStore.contextKey) ?? ""
+                try check(prompt.contains("【常用术语】\nQuartzFlow：项目名称") && prompt.contains("【表达偏好】\n短句"),
+                          "Guided fields missing from compatible request text")
+                try check(!prompt.contains("工作或专业领域") && prompt.hasSuffix("原有补充\n"),
+                          "Empty heading included or existing notes changed")
+            }),
+            ("Personal context respects older edits and safely recovers malformed field storage", {
+                let defaults = MemoryDefaults([:])
+                PersonalContextStore.save(PersonalContextProfile(terms: "old term"), enabled: true, to: defaults)
+                defaults.set("new text from an older app", forKey: PersonalContextStore.contextKey)
+                let updated = PersonalContextStore.load(from: defaults)
+                try check(updated.notes == "new text from an older app" && updated.terms.isEmpty,
+                          "Stale structured data replaced a newer plain-text edit")
+                defaults.set(["terms": 42], forKey: PersonalContextStore.profileKey)
+                try check(PersonalContextStore.load(from: defaults) == updated, "Malformed fields lost the text fallback")
+                defaults.set("", forKey: PersonalContextStore.contextKey)
+                try check(PersonalContextStore.load(from: defaults).isEmpty, "Cleared legacy context resurrected")
+            }),
+            ("Personal context navigation protects edits, clear and enabled state", {
+                let defaults = MemoryDefaults([PersonalContextStore.contextKey: "saved notes"])
+                let editor = PersonalContextEditor(defaults: defaults)
+                var decision = SettingsNavigationGuard.Decision.cancel
+                let navigation = SettingsNavigationGuard(decision: { decision }, reportFailure: { _ in })
+                navigation.install(isDirty: { editor.isDirty }, save: editor.save, discard: editor.discard)
+                editor.profile.terms = "draft term"; editor.enabled = false
+                try check(!navigation.allowNavigation() && editor.profile.terms == "draft term", "Cancel lost form draft")
+                decision = .discard
+                try check(navigation.allowNavigation() && editor.profile.notes == "saved notes" && editor.enabled && !editor.isDirty,
+                          "Discard failed to restore content and toggle")
+                editor.clear()
+                try check(defaults.string(forKey: PersonalContextStore.contextKey) == "saved notes", "Clear saved without user action")
+                decision = .save
+                try check(navigation.allowNavigation() && PersonalContextStore.load(from: defaults).isEmpty,
+                          "Clear did not remove all saved fields")
+                try check(defaults.string(forKey: PersonalContextStore.contextKey) == "", "Clear left request text behind")
+            }),
+            ("Structured context reaches requests only when saved and enabled and snapshots stay frozen", {
+                let f = ConfigurationFixture()
+                try f.modes.select(WritingScene.aiInstruction.storageID)
+                _ = try f.connections.save(.preset(.qwen), key: "synthetic-key")
+                let editor = PersonalContextEditor(defaults: f.defaults)
+                editor.profile.terms = "PROFILE-TERM-SENTINEL"
+                editor.profile.style = "PROFILE-STYLE-SENTINEL"
+                let draftSnapshot = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
+                try check(!draftSnapshot.systemPrompt.contains("PROFILE-TERM-SENTINEL"), "Unsaved profile sent")
+                editor.save()
+                let frozen = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
+                MockProtocol.reset([.init(json: answer("整理后的正文"))])
+                let transport = Fixture()
+                var output: Result<String, Error>?
+                let service = transport.service()
+                service.process(text: input, snapshot: frozen) { output = $0 }
+                spin(4, until: { output != nil })
+                try check(try output?.get() == "整理后的正文", "Structured context request failed")
+                let sent = (try body()["messages"] as! [[String: String]])[0]["content"]!
+                try check(sent.contains("PROFILE-TERM-SENTINEL") && sent.contains("PROFILE-STYLE-SENTINEL"),
+                          "Saved fields did not reach the model request")
+                editor.enabled = false; editor.save()
+                let disabled = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
+                try check(!disabled.systemPrompt.contains("PROFILE-TERM-SENTINEL") && !disabled.systemPrompt.contains("PROFILE-STYLE-SENTINEL"),
+                          "Disabled profile still included")
+                try check(PersonalContextStore.load(from: f.defaults).terms == "PROFILE-TERM-SENTINEL",
+                          "Disabling erased editable content")
+                try check(frozen.systemPrompt.contains("PROFILE-TERM-SENTINEL"), "In-flight snapshot changed")
+                editor.clear(); editor.enabled = true; editor.save()
+                let empty = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
+                try check(!empty.systemPrompt.contains("# 与本次表达相关的用户背景"), "Empty profile injected examples or headings")
+            })
+        ]
+    }
+
     static func mustThrow(_ action: () throws -> Void) throws {
         var caught = false
         do { try action() } catch { caught = true }
@@ -1352,10 +1452,23 @@ private extension AIProcessingRegression {
                                         initialSection: .speech, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                            name: "speech-\(connection.vendor.rawValue)-minimum-\(theme)", size: NSSize(width: 820, height: 580), dark: dark)
             }
-            fixture.defaults.set("领域：合成测试。表达习惯：简洁直接。", forKey: PersonalContextStore.contextKey)
+            PersonalContextStore.save(PersonalContextProfile(), enabled: true, to: fixture.defaults)
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .context,
                                     defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "context-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .context,
+                                    defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+                       name: "context-minimum-\(theme)", size: NSSize(width: 820, height: 580), dark: dark)
+            PersonalContextStore.save(PersonalContextProfile(terms: "QuartzFlow：合成项目名称", role: "软件产品设计",
+                                                            audience: "项目同事；同步进度", style: "短句，保留术语，不加客套结尾。"),
+                                      enabled: false, to: fixture.defaults)
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .context,
+                                    defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+                       name: "context-filled-disabled-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
+            fixture.defaults.set("领域：合成测试。\n表达习惯：简洁直接。", forKey: PersonalContextStore.contextKey)
+            try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .context,
+                                    defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
+                       name: "context-legacy-\(theme)", size: NSSize(width: 1000, height: 1000), dark: dark)
             fixture.permissionState = .notAuthorized; fixture.accessibility.refresh()
             try render(AccessibilityGuideView(service: fixture.accessibility, onLater: {}), name: "permission-guide-\(theme)",
                        size: NSSize(width: 480, height: 580), dark: dark)
