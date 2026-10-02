@@ -17,58 +17,64 @@ enum SpokenTheme {
 }
 
 struct ModeGrid: View {
+    enum Layout { case standard, compact, dense }
     let modes: [ModeDefinition]
     let selectedID: String
     var disabled = false
+    var layout: Layout = .standard
     var onSelect: (String) -> Void
     var onManage: (() -> Void)?
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: layout == .standard ? 8 : 6), count: 3) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if let raw = modes.first(where: { $0.builtin == .rawTranscript }) {
-                modeButton(raw)
-            }
-            group("预设模式", modes: modes.filter { !$0.isCustom && $0.builtin != .rawTranscript })
-            HStack {
-                Text("自定义 · \(modes.filter(\.isCustom).count)/\(ModeStore.customLimit)")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if let onManage {
-                    Button("管理模式", action: onManage).buttonStyle(.plain).font(.caption)
-                        .foregroundStyle(SpokenTheme.accent)
+        if layout == .dense {
+            LazyVGrid(columns: columns, spacing: 4) { ForEach(modes) { modeButton($0) } }
+        } else {
+            VStack(alignment: .leading, spacing: layout == .standard ? 14 : 8) {
+                if let raw = modes.first(where: { $0.builtin == .rawTranscript }) {
+                    modeButton(raw)
                 }
-            }
-            let custom = modes.filter(\.isCustom)
-            if custom.isEmpty, let onManage {
-                Button(action: onManage) {
-                    Label("添加你的第一个模式", systemImage: "plus")
-                        .font(.callout).frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 10))
-                }.buttonStyle(.plain)
-            } else if !custom.isEmpty {
-                LazyVGrid(columns: columns, spacing: 8) { ForEach(custom) { modeButton($0) } }
+                group("预设模式", modes: modes.filter { !$0.isCustom && $0.builtin != .rawTranscript })
+                HStack {
+                    Text("自定义 · \(modes.filter(\.isCustom).count)/\(ModeStore.customLimit)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if let onManage {
+                        Button("管理模式", action: onManage).buttonStyle(.plain).font(.caption)
+                            .foregroundStyle(SpokenTheme.accent)
+                    }
+                }
+                let custom = modes.filter(\.isCustom)
+                if custom.isEmpty, let onManage {
+                    Button(action: onManage) {
+                        Label("添加你的第一个模式", systemImage: "plus")
+                            .font(.callout).frame(maxWidth: .infinity).padding(.vertical, layout == .standard ? 12 : 8)
+                            .background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 10))
+                    }.buttonStyle(.plain)
+                } else if !custom.isEmpty {
+                    LazyVGrid(columns: columns, spacing: layout == .standard ? 8 : 6) { ForEach(custom) { modeButton($0) } }
+                }
             }
         }
     }
 
     private func group(_ title: String, modes: [ModeDefinition]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: layout == .standard ? 8 : 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            LazyVGrid(columns: columns, spacing: 8) { ForEach(modes) { modeButton($0) } }
+            LazyVGrid(columns: columns, spacing: layout == .standard ? 8 : 6) { ForEach(modes) { modeButton($0) } }
         }
     }
 
     private func modeButton(_ mode: ModeDefinition) -> some View {
         let selected = mode.id == selectedID
         return Button { onSelect(mode.id) } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: layout == .dense ? 4 : 6) {
                 Image(systemName: mode.icon).font(.system(size: 12))
                 Text(mode.name).font(.system(size: 12, weight: selected ? .semibold : .regular))
                     .lineLimit(1).truncationMode(.tail)
                 if selected { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
             }
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, minHeight: layout == .standard ? 40 : (layout == .compact ? 32 : 28))
             .padding(.horizontal, 7)
             .foregroundStyle(selected ? SpokenTheme.selectedText : Color.primary)
             .background(selected ? SpokenTheme.accent : SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 10))
@@ -77,6 +83,7 @@ struct ModeGrid: View {
         .buttonStyle(.plain).disabled(disabled).help(mode.name)
         .accessibilityLabel(mode.name)
         .accessibilityValue(selected ? "已选择" : "未选择")
+        .accessibilityIdentifier("mode-" + mode.id)
     }
 }
 

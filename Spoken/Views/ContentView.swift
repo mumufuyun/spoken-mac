@@ -25,14 +25,22 @@ struct ContentView: View {
         _language = AppStorage(wrappedValue: TranslateLanguage.original.rawValue, "translateLang", store: defaults)
     }
 
+    private var compactHeight: Bool { (heightOverride ?? Self.panelHeight) < 400 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: compactHeight ? 4 : 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Spoken").font(.system(size: 20, weight: .semibold, design: .rounded))
-                    Text("把想法说出来").font(.caption).foregroundStyle(.secondary)
+                    Text("Spoken").font(.system(size: compactHeight ? 17 : 20, weight: .semibold, design: .rounded))
+                    if !compactHeight { Text("把想法说出来").font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer()
+                if accessibility.needsAttention && hotkeys.warning != nil {
+                    Button { onOpenSettings(.permissions) } label: {
+                        Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
+                    }.buttonStyle(.plain).help("自动输入未授权，点击完成辅助功能授权")
+                        .accessibilityLabel("自动输入未授权，完成辅助功能授权")
+                }
                 Button { onOpenSettings(.shortcuts) } label: {
                     HStack(spacing: 4) {
                         if hotkeys.warning != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
@@ -43,81 +51,78 @@ struct ContentView: View {
                 Button(action: { onOpenSettings(.modes) }) { Image(systemName: "gearshape") }
                     .buttonStyle(.plain).help("设置").accessibilityLabel("设置")
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    AccessibilityMenuNotice(service: accessibility, onGuide: { onOpenSettings(.permissions) })
-                    if !accessibility.needsAttention || hotkeys.warning != nil {
-                        HotKeyMenuNotice(service: hotkeys, onEdit: { onOpenSettings(.shortcuts) })
-                    }
-                    ModeGrid(modes: modes.modes, selectedID: modes.selected.id, onSelect: selectMode,
-                             onManage: { onOpenSettings(.modes) })
-                }
-            }
+            menuNotice
+            ModeGrid(modes: modes.modes, selectedID: modes.selected.id, layout: compactHeight ? .dense : .compact,
+                     onSelect: selectMode, onManage: { onOpenSettings(.modes) })
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
             Divider()
-            VStack(spacing: 10) {
-                HStack {
-                    Text("AI 模型").foregroundStyle(.secondary)
-                    Spacer()
-                    if connections.connections.isEmpty {
-                        Button("配置模型") { onOpenSettings(.models) }
-                    } else {
+            HStack(spacing: 8) {
+                connectionMenu("语音识别", name: speechConnections.engine == .local ? "本地识别" : (speechConnections.active?.name ?? "配置语音"), icon: "waveform") {
+                    Picker("语音识别", selection: Binding(get: {
+                        speechConnections.engine == .local ? "local" : (speechConnections.configuration.activeID ?? "local")
+                    }, set: { id in
+                        guard !activity.isBusy() else { return }
+                        do {
+                            try speechConnections.select(id == "local" ? speechConnections.configuration.activeID : id,
+                                                         engine: id == "local" ? .local : (speechConnections.engine == .auto ? .auto : .cloud))
+                            #if !SPOKEN_OFFLINE_TESTS
+                            CloudSpeechService.shared.disconnect()
+                            if id != "local" { SpeechService.shared.prepareCloudConnection() }
+                            #endif
+                            error = nil
+                        } catch { self.error = error.localizedDescription }
+                    })) {
+                        Text("本地识别").tag("local")
+                        ForEach(speechConnections.connections) { Text($0.name).tag($0.id) }
+                    }.pickerStyle(.inline)
+                    Divider()
+                    Button("管理语音连接…") { onOpenSettings(.speech) }
+                }.disabled(activity.isBusy())
+                    .help("语音识别：" + (speechConnections.engine == .local ? "本地识别" : (speechConnections.active?.name ?? "尚未配置")))
+                    .accessibilityLabel("切换语音识别")
+                    .accessibilityValue(speechConnections.engine == .local ? "本地识别" : (speechConnections.active?.name ?? "尚未配置"))
+                if connections.connections.isEmpty {
+                    connectionCard("AI 模型") {
+                        Button { onOpenSettings(.models) } label: {
+                            Label("配置模型", systemImage: "cpu").frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.plain).foregroundStyle(SpokenTheme.accent).accessibilityLabel("配置 AI 模型")
+                    }
+                } else {
+                    connectionMenu("AI 模型", name: connections.active?.name ?? "选择模型", icon: "cpu") {
                         Picker("AI 模型", selection: Binding(get: { connections.configuration.activeID ?? "" }, set: { value in
                             do { try connections.select(value.isEmpty ? nil : value); error = nil }
                             catch { self.error = error.localizedDescription }
                         })) {
                             Text("未选择").tag("")
                             ForEach(connections.connections) { Text($0.name + " · " + $0.model).tag($0.id) }
-                        }.labelsHidden().frame(maxWidth: 245)
+                        }.pickerStyle(.inline)
+                        Divider()
+                        Button("管理 AI 模型…") { onOpenSettings(.models) }
                     }
+                        .help(connections.active.map { "AI 模型：" + $0.name + " · " + $0.model } ?? "选择 AI 模型")
+                        .accessibilityLabel("切换 AI 模型")
+                        .accessibilityValue(connections.active.map { $0.name + "，" + $0.model } ?? "尚未配置")
                 }
-                HStack {
-                    Text("语音识别").foregroundStyle(.secondary)
-                    Spacer()
-                    if speechConnections.connections.isEmpty {
-                        Button("本地识别 · 添加云端") { onOpenSettings(.speech) }
-                    } else {
-                        Picker("语音识别", selection: Binding(get: {
-                            speechConnections.engine == .local ? "local" : (speechConnections.configuration.activeID ?? "local")
-                        }, set: { id in
-                            guard !activity.isBusy() else { return }
-                            do {
-                                try speechConnections.select(id == "local" ? speechConnections.configuration.activeID : id,
-                                                             engine: id == "local" ? .local : (speechConnections.engine == .auto ? .auto : .cloud))
-                                #if !SPOKEN_OFFLINE_TESTS
-                                CloudSpeechService.shared.disconnect()
-                                if id != "local" { SpeechService.shared.prepareCloudConnection() }
-                                #endif
-                                error = nil
-                            } catch { self.error = error.localizedDescription }
-                        })) {
-                            Text("本地识别").tag("local")
-                            ForEach(speechConnections.connections) { Text($0.name).tag($0.id) }
-                        }.labelsHidden().frame(maxWidth: 220).disabled(activity.isBusy())
-                        Button { onOpenSettings(.speech) } label: { Image(systemName: "slider.horizontal.3") }
-                            .buttonStyle(.plain).help("管理语音连接").accessibilityLabel("管理语音连接")
-                    }
-                }
-                HStack {
-                    Text("输出语言").foregroundStyle(.secondary)
-                    Spacer()
-                    Picker("输出语言", selection: $language) {
-                        ForEach(TranslateLanguage.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
-                    }.labelsHidden().frame(width: 125)
-                }
-            }.font(.callout)
-            if let message = error ?? modes.loadError ?? connections.loadError ?? speechConnections.loadError {
-                Text(message).font(.caption).foregroundStyle(.red).lineLimit(2).help(message)
-            } else if let active = connections.active, active.credentialID == nil {
-                Button("当前连接缺少密钥，前往配置") { onOpenSettings(.models) }.font(.caption)
             }
             HStack {
+                Text("输出语言").foregroundStyle(.secondary)
+                Picker("输出语言", selection: $language) {
+                    ForEach(TranslateLanguage.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+                }.labelsHidden().frame(width: 125)
+                Spacer()
+                Button("退出") { NSApplication.shared.terminate(nil) }.buttonStyle(.plain)
+            }.font(.caption).controlSize(.small)
+            if let message = error ?? modes.loadError ?? connections.loadError ?? speechConnections.loadError {
+                Text(message).font(.caption).foregroundStyle(.red).lineLimit(compactHeight ? 1 : 2).help(message)
+            } else if let active = connections.active, active.credentialID == nil {
+                Button("当前连接缺少密钥，前往配置") { onOpenSettings(.models) }.font(.caption)
+            } else if !compactHeight {
                 Text(hotkeys.warning != nil ? "快捷键不可用，请先修改或重新检测" : (suggestion.isEmpty ? "回到输入框，按 \(hotkeys.displayName) 开始" : suggestion))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).help(suggestion)
-                Spacer()
-                Button("退出") { NSApplication.shared.terminate(nil) }.buttonStyle(.plain).font(.caption)
             }
         }
-        .padding(18).frame(width: 380, height: heightOverride ?? Self.panelHeight)
+        .padding(compactHeight ? 10 : 14).frame(width: 380, height: heightOverride ?? Self.panelHeight)
         .background(SpokenTheme.background).tint(SpokenTheme.accent)
         .onAppear {
             if let app = NSWorkspace.shared.frontmostApplication,
@@ -127,14 +132,63 @@ struct ContentView: View {
         }
     }
 
-    static var panelHeight: CGFloat { min(480, max(300, (NSScreen.main?.visibleFrame.height ?? 800) - 70)) }
+    @ViewBuilder private var menuNotice: some View {
+        if hotkeys.warning != nil || accessibility.needsAttention || hotkeys.showsGuide {
+            HStack(spacing: 6) {
+                if let warning = hotkeys.warning {
+                    Label("快捷键不可用", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).help(warning).accessibilityLabel(warning)
+                    Spacer(minLength: 0)
+                    Button("修改") { onOpenSettings(.shortcuts) }.accessibilityLabel("修改快捷键")
+                    Button("重新检测") { hotkeys.recheck() }.disabled(hotkeys.isBusy)
+                } else if accessibility.needsAttention {
+                    Label("需手动粘贴", systemImage: "hand.raised.fill").foregroundStyle(.orange)
+                        .help(accessibility.state.statusText + "。完成后请按 Command V 手动粘贴。")
+                    Spacer(minLength: 0)
+                    Button("完成辅助功能授权") { onOpenSettings(.permissions) }
+                } else {
+                    Text("按 \(hotkeys.displayName) 开始 / 结束")
+                        .help("回到目标输入框，按一次开始，再按一次结束。处理中按当前快捷键或 Esc 取消。")
+                    Spacer(minLength: 0)
+                    Button("操作说明") { onOpenSettings(.shortcuts) }
+                    Button("知道了") { hotkeys.acknowledgeGuide() }
+                }
+            }.font(.caption).controlSize(.mini).lineLimit(1)
+                .padding(.horizontal, 8).padding(.vertical, compactHeight ? 4 : 8)
+                .background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func connectionMenu<Items: View>(_ title: String, name: String, icon: String,
+                                             @ViewBuilder items: () -> Items) -> some View {
+        connectionCard(title) {
+            // AppKit flattens a Menu's label; keep the caption and card outside it.
+            Menu(content: items) { Label(name, systemImage: icon).lineLimit(1).truncationMode(.tail) }
+                .menuStyle(.borderlessButton)
+        }
+    }
+
+    private func connectionCard<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if !compactHeight { Text(title).font(.system(size: 10)).foregroundStyle(.secondary) }
+            control().font(.system(size: 12)).frame(width: compactHeight ? 164 : 156, alignment: .leading)
+        }.padding(compactHeight ? 6 : 8)
+            .background(SpokenTheme.inset, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    static var panelHeight: CGFloat { min(440, max(300, (NSScreen.main?.visibleFrame.height ?? 800) - 70)) }
     private func selectMode(_ id: String) {
         do { try modes.select(id); error = nil } catch { self.error = error.localizedDescription }
     }
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case modes, models, shortcuts, permissions, speech, context
+    case speech, models, modes, context, shortcuts, permissions
+    static let groups: [(title: String, sections: [SettingsSection])] = [
+        ("识别与处理", [.speech, .models]),
+        ("表达偏好", [.modes, .context]),
+        ("操作与授权", [.shortcuts, .permissions])
+    ]
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -196,21 +250,25 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Spoken").font(.system(size: 23, weight: .semibold, design: .rounded))
                     .padding(.vertical, 24).padding(.horizontal, 10)
-                ForEach(SettingsSection.allCases) { item in
-                    Button {
-                        if item != section && navigation.allowNavigation() { section = item }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Label(item.title, systemImage: item.icon).font(.system(size: 13, weight: .medium))
-                            if item == .permissions && accessibility.needsAttention {
-                                Image(systemName: "exclamationmark.circle.fill").font(.caption)
-                                    .foregroundStyle(.orange).accessibilityHidden(true)
+                ForEach(SettingsSection.groups, id: \.title) { group in
+                    Text(group.title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).padding(.top, 8)
+                    ForEach(group.sections) { item in
+                        Button {
+                            if item != section && navigation.allowNavigation() { section = item }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Label(item.title, systemImage: item.icon).font(.system(size: 13, weight: .medium))
+                                if item == .permissions && accessibility.needsAttention {
+                                    Image(systemName: "exclamationmark.circle.fill").font(.caption)
+                                        .foregroundStyle(.orange).accessibilityHidden(true)
+                                }
                             }
-                        }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                            .background(section == item ? SpokenTheme.surface : .clear, in: RoundedRectangle(cornerRadius: 10))
-                    }.buttonStyle(.plain).accessibilityValue(section == item ? "已选择" : "")
-                        .accessibilityLabel(item.title + (item == .permissions && accessibility.needsAttention ? "，待授权" : ""))
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                                .background(section == item ? SpokenTheme.surface : .clear, in: RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(.plain).accessibilityValue(section == item ? "已选择" : "")
+                            .accessibilityLabel(item.title + (item == .permissions && accessibility.needsAttention ? "，待授权" : ""))
+                    }
                 }
                 Spacer()
                 Text("语言是最好的输入").font(.caption).foregroundStyle(.secondary).padding(10)

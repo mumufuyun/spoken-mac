@@ -1225,6 +1225,12 @@ private extension AIProcessingRegression {
             panel.orderFront(nil)
             spin(0.35)
             host.layoutSubtreeIfNeeded()
+            if name.hasPrefix("menu-") {
+                func containsScrollView(_ view: NSView) -> Bool {
+                    view is NSScrollView || view.subviews.contains(where: containsScrollView)
+                }
+                try check(!containsScrollView(host), "Mode panel unexpectedly requires scrolling: \(name)")
+            }
             guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw TestFailure(description: "Cannot allocate UI bitmap") }
             host.cacheDisplay(in: host.bounds, to: bitmap)
             guard let png = bitmap.representation(using: .png, properties: [:]) else { throw TestFailure(description: "Cannot encode UI bitmap") }
@@ -1235,7 +1241,7 @@ private extension AIProcessingRegression {
         for dark in [false, true] {
             let theme = dark ? "dark" : "light"
             try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
-                       name: "menu-\(theme)", size: NSSize(width: 380, height: 480), dark: dark)
+                       name: "menu-\(theme)", size: NSSize(width: 380, height: ContentView.panelHeight), dark: dark)
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .modes, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
                        name: "modes-\(theme)", size: NSSize(width: 1000, height: 740), dark: dark)
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .models, defaults: fixture.defaults, speechDependencies: fixture.speechSettings),
@@ -1246,7 +1252,7 @@ private extension AIProcessingRegression {
             fixture.hotkeyRegistrar.occupied.insert(fixture.hotkeys.configuration); fixture.hotkeys.recheck()
             try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
                                    hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, defaults: fixture.defaults),
-                       name: "menu-conflict-\(theme)", size: NSSize(width: 380, height: 480), dark: dark)
+                       name: "menu-conflict-\(theme)", size: NSSize(width: 380, height: ContentView.panelHeight), dark: dark)
             fixture.hotkeyRegistrar.occupied.removeAll(); fixture.hotkeys.recheck()
             fixture.defaults.set(SpeechRecognitionProvider.cloud.rawValue, forKey: "speechRecognitionProvider")
             try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility, initialSection: .speech,
@@ -1293,13 +1299,33 @@ private extension AIProcessingRegression {
         try render(SettingsView(modes: fixture.modes, connections: fixture.connections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
                                 initialSection: .shortcuts, defaults: fixture.defaults, speechDependencies: fixture.speechSettings), name: "shortcuts-minimum",
                    size: NSSize(width: 820, height: 580), dark: false)
+        // Crowded and first-launch states must also fit without a scrolling container.
+        try Data("invalid-preview-json".utf8).write(to: fixture.file("connections").url)
+        fixture.connections.reload()
+        fixture.permissionState = .notAuthorized; fixture.accessibility.refresh()
+        fixture.hotkeyRegistrar.occupied.insert(fixture.hotkeys.configuration); fixture.hotkeys.recheck()
+        let empty = ConfigurationFixture()
+        empty.permissionState = .notAuthorized
+        for dark in [false, true] {
+            let theme = dark ? "dark" : "light"
+            for height: CGFloat in [300, 440] {
+                try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections,
+                                       speechConnections: fixture.speechConnections, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility,
+                                       defaults: fixture.defaults, panelHeight: height),
+                           name: "menu-errors-\(Int(height))-\(theme)", size: NSSize(width: 380, height: height), dark: dark)
+                try render(ContentView(onOpenSettings: { _ in }, modes: empty.modes, connections: empty.connections,
+                                       speechConnections: empty.speechConnections, hotkeys: empty.hotkeys, accessibility: empty.accessibility,
+                                       defaults: empty.defaults, panelHeight: height),
+                           name: "menu-empty-\(Int(height))-\(theme)", size: NSSize(width: 380, height: height), dark: dark)
+            }
+        }
         if let frontmost, let after = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             try check(after == frontmost, "Preview panels stole foreground application focus")
             print("PASS: Preview panels preserved foreground application focus")
         } else {
             print("SKIP: Foreground focus could not be read in this environment; interactive verification remains required")
         }
-        print("PASS: Native light/dark/minimum-size surfaces rendered")
+        print("PASS: Native light/dark/minimum-size surfaces rendered; mode panels contain no scroll views")
     }
 }
 
