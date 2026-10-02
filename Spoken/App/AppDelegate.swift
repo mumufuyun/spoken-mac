@@ -11,6 +11,7 @@ enum AppState: String, CaseIterable {
     case finishing
     case injecting
     case postProcessing
+    case recovering
 }
 
 @MainActor
@@ -42,6 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var popover: NSPopover!
     private var hotKeyService: HotKeyService!
     private var recordingPanel: NSPanel?
+    private var recoveryPanel: InputRecoveryPanel?
     private var processingNoticePanel: NSPanel?
     private var settingsWindow: NSWindow?
     private var hotKeyNoticePanel: NSPanel?
@@ -80,6 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        InputRecoveryStore.shared.cancelProcessing()
         hotKeyService?.unregisterAll()
         accessibility.stopMonitoring()
         networkMonitor.cancel()
@@ -192,8 +195,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hotKeyService = HotKeyService.shared
         hotKeyService.onTriggered = { [weak self] in self?.handleHotKey() }
         hotKeyService.onEscape = { [weak self] in
-            guard let self, self.recordingPanel?.isVisible == true else { return }
-            self.recordingViewModel.cancel()
+            guard let self else { return }
+            if self.recoveryPanel?.isVisible == true { self.closeRecoveryPanel() }
+            else if self.recordingPanel?.isVisible == true { self.recordingViewModel.cancel() }
         }
         hotKeyService.onUnavailable = { [weak self] in self?.showHotKeyNotice() }
         // Read the completed state after @Published has updated. A queued initial/paused state
@@ -297,7 +301,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func handleHotKey() {
         guard !AppUpdateService.shared.isInstalling else { return }
-        if popover.isShown {
+        if recoveryPanel != nil {
+            closeRecoveryPanel()
+            popover.performClose(nil)
+        } else if popover.isShown {
             popover.performClose(nil)
             return
         }
@@ -330,7 +337,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hotKeyService.setBusy(true)
         stateManager.transition(to: .starting)
 
-        let viewModel = RecordingViewModel()
+        let recovery = InputRecoveryStore.shared
+        let viewModel = RecordingViewModel(retainOriginal: { text, incomplete in
+            recovery.capture(text, mayBeIncomplete: incomplete)
+        })
+        viewModel.hasRecoverableInput = recovery.entry != nil
+        viewModel.onRecover = { [weak self] in self?.showRecoveryPanel() }
         viewModel.targetApplication = frontmostAppBeforeHotKey
         let recordingView = RecordingPanelView(viewModel: viewModel)
         let hostingController = NSHostingController(rootView: recordingView)
@@ -400,6 +412,44 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self, let panel, self.recordingPanel === panel, !viewModel.isCancelled else { return }
             viewModel.startRecording()
         }
+    }
+
+    // MARK: - Input Recovery
+
+    private func showRecoveryPanel() {
+        let recovery = InputRecoveryStore.shared
+        guard recordingViewModel.canRecoverInput, recovery.entry != nil,
+              !SpeechService.shared.hasSpeechInCurrentSession, !AppUpdateService.shared.isInstalling else { return }
+        let origin = recordingPanel?.frame.origin
+        // Cancel capture before showing recovery. This invalidates late ASR callbacks and
+        // deliberately keeps the retained original when the new recording was still empty.
+        recordingViewModel.cancel()
+        recordingPanel?.orderOut(nil)
+        recordingPanel = nil
+        recovery.prepareForPresentation()
+        let panel = InputRecoveryPanel(contentRect: NSRect(origin: origin ?? .zero, size: InputRecoveryView.size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = .statusBar
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak self] in self?.closeRecoveryPanel() })
+        if origin == nil { panel.center() }
+        recoveryPanel = panel
+        hotKeyService.setBusy(true)
+        hotKeyService.startEscapeMonitoring()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func closeRecoveryPanel() {
+        InputRecoveryStore.shared.cancelProcessing()
+        recoveryPanel?.orderOut(nil)
+        recoveryPanel?.contentView = nil
+        recoveryPanel = nil
+        hotKeyService.stopEscapeMonitoring()
+        hotKeyService.setBusy(stateManager.isBusy())
     }
 
     // MARK: - Text Injection
@@ -622,6 +672,13 @@ class RecordingViewModel: ObservableObject {
     @Published var statusText = "正在准备麦克风，请稍候…"
     @Published var displayStatus = "录音"
     @Published var isCancelled = false
+    @Published var hasDetectedSpeech = false
+    @Published var hasRecoverableInput = false
+    var onRecover: (() -> Void)?
+    var canRecoverInput: Bool {
+        hasRecoverableInput && isRecording && !isProcessing && !isCancelled && !hasDetectedSpeech
+            && partialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
     private(set) var fallbackNotice: String?
     private var recognitionFailure: String?
     private var frontmostApp: NSRunningApplication?
@@ -640,6 +697,7 @@ class RecordingViewModel: ObservableObject {
     private let processor: AIProcessingService
     private let stopCapture: () -> Void
     private let cancelCapture: () -> Void
+    private let retainOriginal: (String, Bool) -> Void
     private var hasSubmitted = false
 
     init(snapshotProvider: @escaping () throws -> AIProcessingSnapshot = {
@@ -647,12 +705,14 @@ class RecordingViewModel: ObservableObject {
     }, modeNameProvider: @escaping () -> String = { ModeStore.shared.selected.name },
          processor: AIProcessingService = .shared,
          stopCapture: @escaping () -> Void = { SpeechService.shared.stopRecording() },
-         cancelCapture: @escaping () -> Void = { SpeechService.shared.cancelRecording() }) {
+         cancelCapture: @escaping () -> Void = { SpeechService.shared.cancelRecording() },
+         retainOriginal: @escaping (String, Bool) -> Void = { _, _ in }) {
         self.snapshotProvider = snapshotProvider
         self.modeNameProvider = modeNameProvider
         self.processor = processor
         self.stopCapture = stopCapture
         self.cancelCapture = cancelCapture
+        self.retainOriginal = retainOriginal
     }
 
     /// Called for both the stop button/hotkey and an automatic ASR finalization.
@@ -684,6 +744,7 @@ class RecordingViewModel: ObservableObject {
         isCaptureReady = false
         isAudioBuffered = false
         isProcessing = false
+        hasDetectedSpeech = false
         fallbackNotice = nil
         recognitionFailure = nil
         partialText = ""
@@ -748,6 +809,13 @@ class RecordingViewModel: ObservableObject {
                     strongSelf.processAndInput(text.isEmpty ? strongSelf.lastRecognizedText : text)
                 }
             },
+            onRawFinal: { [weak self] text, incomplete in
+                self?.retainRecognizedOriginal(text, mayBeIncomplete: incomplete)
+            },
+            onSpeechDetected: { [weak self] in
+                guard let self, self.isRecording, !self.isCancelled else { return }
+                self.hasDetectedSpeech = true
+            },
             onAudioBuffered: { [weak self] in
                 guard let self, self.isRecording, !self.isCancelled else { return }
                 self.isAudioBuffered = true
@@ -809,6 +877,11 @@ class RecordingViewModel: ObservableObject {
         PipelineLatencyMetrics.shared.abandon()
 
         onCancel?()
+    }
+
+    func retainRecognizedOriginal(_ text: String, mayBeIncomplete: Bool) {
+        guard !isCancelled, !hasSubmitted else { return }
+        retainOriginal(text, mayBeIncomplete || recognitionFailure != nil)
     }
 
     func stopRecording() {
@@ -951,10 +1024,15 @@ struct RecordingPanelView: View {
             Text(modeError ?? viewModel.statusText).font(.system(size: 13)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head).frame(maxWidth: .infinity, alignment: .trailing)
             Spacer(minLength: 0)
-            HStack {
+            HStack(spacing: 8) {
+                Button { viewModel.onRecover?() } label: {
+                    Label("找回上次输入", systemImage: "arrow.uturn.backward")
+                }.buttonStyle(.plain).font(.caption).foregroundStyle(SpokenTheme.accent)
+                    .disabled(!viewModel.canRecoverInput)
+                    .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "停止本轮录音并找回上次输入" : "录音或处理已开始，完成或取消后可找回"))
+                Spacer(minLength: 0)
                 Text(hotkeys.isRegistered ? "\(hotkeys.displayName)\(viewModel.isRecording ? "完成" : "取消") · Esc 取消" : "快捷键不可用 · Esc 取消")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
                 Button("取消") { viewModel.cancel() }.controlSize(.small)
                     .disabled(viewModel.isCancelled)
             }

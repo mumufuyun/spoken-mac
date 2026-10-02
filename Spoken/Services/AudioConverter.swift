@@ -1,6 +1,39 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+extension PCMVoiceActivityDetector {
+    /// Match the cloud PCM threshold for native buffers. This only guards recovery;
+    /// it never changes the audio sent to the recognizer.
+    static func containsMeaningfulSpeech(_ buffer: AVAudioPCMBuffer) -> Bool {
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return false }
+        let required = max(1, Int(ceil(Double(count) * 0.01)))
+        let stride = buffer.stride
+        if let channels = buffer.int16ChannelData {
+            for channel in 0..<Int(buffer.format.channelCount) {
+                let samples = buffer.format.isInterleaved ? channels[0] : channels[channel]
+                let offset = buffer.format.isInterleaved ? channel : 0
+                var active = 0
+                for index in 0..<count where abs(Int(samples[index * stride + offset])) >= 700 {
+                    active += 1
+                    if active >= required { return true }
+                }
+            }
+        } else if let channels = buffer.floatChannelData {
+            for channel in 0..<Int(buffer.format.channelCount) {
+                let samples = buffer.format.isInterleaved ? channels[0] : channels[channel]
+                let offset = buffer.format.isInterleaved ? channel : 0
+                var active = 0
+                for index in 0..<count where abs(samples[index * stride + offset]) >= Float(700.0 / 32768.0) {
+                    active += 1
+                    if active >= required { return true }
+                }
+            }
+        }
+        return false
+    }
+}
+
 /// 将硬件原生音频流转换为云端 ASR 约定的 16 kHz / mono / Int16 PCM。
 /// 实例只能在创建它的单一音频 Tap 回调中使用。
 final class StreamingASRPCMConverter {

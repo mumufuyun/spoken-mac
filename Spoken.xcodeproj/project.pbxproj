@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A25000000000000000000002 /* InputRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000000000000000000001 /* InputRecoveryStore.swift */; };
+		A25000000000000000000004 /* InputRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25000000000000000000003 /* InputRecoveryView.swift */; };
 		118520E77B5FCEE25FC00663 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3955CA0E5F1D8B48FA0D5C76 /* AppDelegate.swift */; };
 		17E87A02A61E0702FD6449E8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80D8DB3AB22966206517C70F /* ContentView.swift */; };
 		39B12DEF6B1FF44C089707E6 /* KeyboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB2856E4008DD751136C6955 /* KeyboardService.swift */; };
@@ -61,6 +63,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A25000000000000000000001 /* InputRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputRecoveryStore.swift; sourceTree = "<group>"; };
+		A25000000000000000000003 /* InputRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputRecoveryView.swift; sourceTree = "<group>"; };
 		2FA57F0A31DC35BC7A615EA5 /* Spoken.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Spoken.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3955CA0E5F1D8B48FA0D5C76 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		6D34239B1DE4FD221AA22A2D /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -186,6 +190,7 @@
 		B0C0D1C4B0F3D73A76AAE6CA /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				A25000000000000000000003 /* InputRecoveryView.swift */,
 				A24000000000000000000003 /* UpdateSettingsView.swift */,
 				2F809342A2D14CE9F2ED777F /* ModelSettingsView.swift */,
 				1C2EF13BFC455138431CEC3B /* ModeSettingsView.swift */,
@@ -223,6 +228,7 @@
 		F5DCD5DBCD37A93D4DB53B72 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				A25000000000000000000001 /* InputRecoveryStore.swift */,
 				BB015DD15DFB6656051DEA2C /* SpeechConnectionStore.swift */,
 				F679CEFCB4BA8F55005AA2E4 /* ModelConnectionStore.swift */,
 				EDEFA6F5F51E54ABA656A58B /* ModeStore.swift */,
@@ -345,6 +351,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A25000000000000000000002 /* InputRecoveryStore.swift in Sources */,
+				A25000000000000000000004 /* InputRecoveryView.swift in Sources */,
 				A24000000000000000000004 /* UpdateSettingsView.swift in Sources */,
 				A24000000000000000000002 /* AppUpdateService.swift in Sources */,
 				E7EE872F5F7D8C76C0B985D4 /* HTTPTranscriptionProvider.swift in Sources */,

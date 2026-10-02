@@ -1,28 +1,11 @@
 import Foundation
 
-/// 只修正高置信度的语音音译错误。
-/// 正常中文词、品牌名和行业名称不在这里无上下文替换，
-/// 避免“源码”、“愿景”、“经纬”等正常内容被改变原意。
+/// 仅合并识别结果中缩写字母之间的空格，不进行固定词语替换。
+/// 术语消歧交由需要 AI 整理的场景结合上下文处理。
 enum SpeechPostProcessor {
-    private static let highConfidenceMappings: [(wrong: String, right: String)] = [
-        ("阿皮哎", "API"),
-        ("爱劈唉", "API"),
-        ("诶批艾", "API"),
-        ("艾斯迪凯", "SDK"),
-        ("埃斯迪凯", "SDK"),
-        ("八哥", "bug"),
-        ("巴格", "bug"),
-        ("欧克", "OK"),
-        ("欧凯", "OK"),
-    ]
-
     static func postProcess(_ text: String) -> String {
         guard !text.isEmpty else { return text }
-        var result = text
-        for (wrong, right) in highConfidenceMappings.sorted(by: { $0.wrong.count > $1.wrong.count }) {
-            result = result.replacingOccurrences(of: wrong, with: right)
-        }
-        return collapseSpacedAcronyms(in: result)
+        return collapseSpacedAcronyms(in: text)
     }
 
     private static func collapseSpacedAcronyms(in text: String) -> String {

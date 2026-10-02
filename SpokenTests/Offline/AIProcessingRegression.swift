@@ -424,7 +424,7 @@ private struct AIProcessingRegression {
                 vm.finishAIProcessing(.success("迟到正文"), originalText: input)
                 try check(outputs.count == count, "Cancelled ViewModel emitted text")
             })
-        ] + configurationTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests()
+        ] + configurationTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests()
         var failures = 0
         for (name, test) in tests {
             do { try test(); print("PASS: \(name)") }
@@ -1231,14 +1231,20 @@ private extension AIProcessingRegression {
                 }
                 try check(!pcm.isEmpty && pcm.count % 2 == 0 && pcm.count <= 3_200, "Unexpected PCM format/length")
             }),
-            ("ASR final fallback and text correction preserve normal Chinese terms", {
+            ("ASR final fallback preserves recognized words without fixed replacements", {
                 try check(CloudRecognitionResultResolver.best(cloudText: "最终结果", latestPartial: "临时") == "最终结果", "Final lost")
                 for final: String? in [nil, " \n"] {
                     try check(CloudRecognitionResultResolver.best(cloudText: final, latestPartial: "临时") == "临时", "Partial lost on empty final")
                 }
-                let text = "我们的愿景是开放源码，同时记录地图经纬度和老虎的踪迹。"
-                try check(SpeechPostProcessor.postProcess(text) == text, "Normal terms corrupted")
-                try check(SpeechPostProcessor.postProcess("这个八哥要调用阿皮哎") == "这个bug要调用API", "Terminology correction failed")
+                for text in [
+                    "我们的愿景是开放源码，同时记录地图经纬度和老虎的踪迹。",
+                    "我家养了一只八哥，欧凯负责照顾它。",
+                    "这个八哥要调用阿皮哎",
+                    "阿皮哎、爱劈唉、诶批艾、艾斯迪凯、埃斯迪凯、八哥、巴格、欧克、欧凯"
+                ] {
+                    try check(SpeechPostProcessor.postProcess(text) == text, "Recognized words were replaced")
+                }
+                try check(SpeechPostProcessor.postProcess("调用 A P I 和 S D K") == "调用 API 和 SDK", "Acronym spacing changed")
             }),
             ("Warm ASR reuse requires every health and identity condition", {
                 for failingCondition in -1..<7 {
@@ -1365,6 +1371,33 @@ private extension AIProcessingRegression {
             vm.statusText = "这是一段合成语音，用于界面检查。"
             try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-\(theme)",
                        size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+            vm.showsModes = false; vm.hasRecoverableInput = true
+            try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-recovery-ready-\(theme)",
+                       size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+            vm.hasDetectedSpeech = true
+            try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-recovery-speaking-\(theme)",
+                       size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+            let recoveryFixture = try RecoveryFixture()
+            let recovery = recoveryFixture.recovery!
+            try recoveryFixture.config.modes.select(WritingScene.workMessage.storageID)
+            recovery.capture("嗯那个评审改到周五下午三点吧，方案我明天发，预算这块先别定，还得等财务确认。")
+            recovery.prepareForPresentation()
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-original-\(theme)", size: InputRecoveryView.size, dark: dark)
+            recovery.selectMode(WritingScene.meetingNotes.storageID); recovery.reprocess()
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-running-\(theme)", size: InputRecoveryView.size, dark: dark)
+            recoveryFixture.processor.requests.last!.finish(.success("评审：周五下午三点。\n方案：明天发送。\n预算：等待财务确认。"))
+            spin(0.1, until: { !recovery.isProcessing })
+            recovery.selectMode(WritingScene.formalDocument.storageID)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-result-new-scene-\(theme)", size: InputRecoveryView.size, dark: dark)
+            var longMode = recoveryFixture.config.modes.draft()
+            longMode.name = "一个特别长的自定义场景名称用于检查找回页布局"
+            try recoveryFixture.config.modes.save(longMode, baseRules: recoveryFixture.config.modes.configuration.baseRules)
+            recovery.selectMode(longMode.id)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-long-scene-\(theme)", size: InputRecoveryView.size, dark: dark)
+            recovery.capture(String(repeating: "这是一段需要核对的较长原始口述。预算还要等财务确认。\n", count: 25), mayBeIncomplete: true)
+            recovery.reprocess(); recoveryFixture.processor.requests.last!.finish(.failure(MiniMaxError.timeout))
+            spin(0.1, until: { !recovery.isProcessing })
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-long-failure-\(theme)", size: InputRecoveryView.size, dark: dark)
             fixture.permissionState = .ready; fixture.accessibility.refresh()
         }
         try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
@@ -1425,6 +1458,7 @@ private struct InteractiveSmokeView: View {
     @State private var output = "尚未处理合成语音"
     @State private var failWrites = false
     @State private var failSpeechKeyRead = false
+    @State private var recoveryPanel: InputRecoveryPanel?
 
     private var speechDependencies: SpeechSettingsDependencies {
         fixture.keys.failRead = failSpeechKeyRead
@@ -1440,6 +1474,7 @@ private struct InteractiveSmokeView: View {
                 Spacer()
                 Button(showMenu ? "返回设置" : "模式面板") { showMenu.toggle(); showingRecording = false }
                 Button("模拟录音浮窗", action: showRecording)
+                Button("找回输入演示", action: showRecovery)
                 Toggle("模拟保存失败", isOn: $failWrites).toggleStyle(.checkbox)
                 Toggle("模拟语音密钥读取失败", isOn: $failSpeechKeyRead).toggleStyle(.checkbox)
             }.padding(12)
@@ -1473,6 +1508,25 @@ private struct InteractiveSmokeView: View {
             }.padding(10)
         }
         .onChange(of: failWrites) { _, failing in fixture.failingFiles = failing ? ["modes", "connections", "hotkey-v1"] : [] }
+    }
+
+    @MainActor
+    private func showRecovery() {
+        recoveryPanel?.orderOut(nil)
+        let recovery = InputRecoveryStore(modes: fixture.modes, processor: service,
+            snapshotProvider: { id in
+                try AIProcessingSnapshot.capture(modes: fixture.modes, connections: fixture.connections, defaults: fixture.defaults, modeID: id)
+            }, canStart: { true }, copyText: { value in output = "复制检查：" + value; return true })
+        recovery.capture("嗯那个评审改到周五下午三点吧，方案我明天发，预算这块先别定，还得等财务确认。")
+        recovery.prepareForPresentation()
+        let panel = InputRecoveryPanel(contentRect: NSRect(origin: .zero, size: InputRecoveryView.size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hidesOnDeactivate = false
+        panel.level = .floating; panel.isReleasedWhenClosed = false
+        panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak panel] in
+            recovery.cancelProcessing(); panel?.orderOut(nil); panel?.contentView = nil; recoveryPanel = nil
+        })
+        panel.center(); recoveryPanel = panel; panel.makeKeyAndOrderFront(nil)
     }
 
     @MainActor
@@ -2468,4 +2522,204 @@ extension AIProcessingRegression {
         ]
     }
     static func throwaway() {}
+}
+
+private final class RecoveryProcessorStub: RecoveryTextProcessing {
+    struct Request {
+        let text: String
+        let snapshot: AIProcessingSnapshot
+        let finish: (Result<String, Error>) -> Void
+    }
+    var requests: [Request] = []
+    var cancellations = 0
+    func process(text: String, snapshot: AIProcessingSnapshot, completion: @escaping (Result<String, Error>) -> Void) {
+        requests.append(Request(text: text, snapshot: snapshot, finish: completion))
+    }
+    func cancelCurrentTask() { cancellations += 1 }
+}
+
+@MainActor
+private final class RecoveryFixture {
+    let config = ConfigurationFixture()
+    let processor = RecoveryProcessorStub()
+    var copied: [String] = []
+    var copySucceeds = true
+    var allowsStart = true
+    var recovery: InputRecoveryStore!
+
+    init(activity: StateManager? = nil) throws {
+        _ = try config.connections.save(.preset(.qwen), key: "synthetic-recovery-key")
+        recovery = InputRecoveryStore(modes: config.modes, processor: processor, activity: activity,
+            snapshotProvider: { [config] id in
+                try AIProcessingSnapshot.capture(modes: config.modes, connections: config.connections, defaults: config.defaults, modeID: id)
+            }, canStart: { [weak self] in self?.allowsStart == true }, copyText: { [weak self] text in
+                self?.copied.append(text)
+                return self?.copySucceeds == true
+            })
+    }
+}
+
+private extension AIProcessingRegression {
+    @MainActor
+    static func recoveryTests() -> [(String, () throws -> Void)] {
+        [
+            ("Recovery: retains exact ASR original and ignores empty captures", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                let original = "  八哥与 A P I\n未整理的原文  "
+                store.capture(original, mayBeIncomplete: true)
+                let id = store.entry?.id
+                store.capture(" \n\t")
+                store.copyDisplayedText()
+                try check(store.entry?.id == id && store.entry?.original == original && f.copied == [original], "Original altered or replaced by empty input")
+                try check(store.entry?.mayBeIncomplete == true, "Partial recognition lost its warning")
+                store.capture("下一次原文")
+                try check(store.entry?.id != id && store.selectedModeID == nil && store.result == nil && store.entry?.mayBeIncomplete == false, "New transcript did not reset recovery")
+                let fresh = try RecoveryFixture()
+                try check(fresh.recovery.entry == nil && !fresh.recovery.canReprocess, "Recovery persisted across instances")
+            }),
+            ("Recovery: scene selection is local, preserves results and snapshots current settings", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                try f.config.modes.select(WritingScene.workMessage.storageID)
+                store.capture("原文 A P I"); store.prepareForPresentation()
+                try check(store.selectedModeID == WritingScene.workMessage.storageID, "Initial scene not inherited")
+                store.selectMode(WritingScene.meetingNotes.storageID)
+                store.prepareForPresentation()
+                try check(f.processor.requests.isEmpty && f.config.modes.selected.builtin == .workMessage && store.selectedModeID == WritingScene.meetingNotes.storageID, "Selection submitted, reset or changed global mode")
+                f.config.defaults.set(TranslateLanguage.english.rawValue, forKey: "translateLang")
+                store.reprocess()
+                store.selectMode(WritingScene.formalDocument.storageID)
+                let request = f.processor.requests[0]
+                try check(request.snapshot.mode.builtin == .meetingNotes && request.snapshot.language == .english && request.text == "原文 API", "Wrong scene, language or source")
+                try check(store.selectedModeID == WritingScene.meetingNotes.storageID, "Changed locked scene")
+                request.finish(.success("第一轮结果")); spin(0.1, until: { !store.isProcessing })
+                store.selectMode(WritingScene.aiInstruction.storageID)
+                try check(store.result == "第一轮结果" && store.resultMode?.builtin == .meetingNotes && f.processor.requests.count == 1, "Selection destroyed or relabeled old result")
+                f.config.defaults.set(TranslateLanguage.japanese.rawValue, forKey: "translateLang")
+                store.reprocess()
+                try check(store.result == nil && store.display == .original && f.processor.requests[1].text == "原文 API", "Rerun used previous result")
+                try check(f.processor.requests[1].snapshot.mode.builtin == .aiInstruction && f.processor.requests[1].snapshot.language == .japanese, "Rerun did not refresh settings")
+                store.cancelProcessing()
+            }),
+            ("Recovery: canceled and replaced requests cannot deliver stale results", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                store.capture("旧原文"); store.reprocess(); store.cancelProcessing()
+                f.processor.requests[0].finish(.success("迟到结果")); spin(0.1)
+                try check(store.result == nil && store.notice?.contains("取消") == true, "Canceled request completed")
+                store.reprocess(); store.capture("新原文"); store.reprocess()
+                f.processor.requests[1].finish(.success("过期旧结果")); spin(0.1)
+                try check(store.isProcessing && store.result == nil && store.entry?.original == "新原文", "Replaced request overwrote new entry")
+                f.processor.requests[2].finish(.success("新结果")); spin(0.1, until: { !store.isProcessing })
+                try check(store.result == "新结果" && f.processor.cancellations == 2, "Current request failed or cancellation missing")
+            }),
+            ("Recovery: failures and unsafe output retain copyable original", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                store.capture("可找回的原文")
+                for outcome: Result<String, Error> in [.failure(MiniMaxError.timeout), .success("   "), .success("<think>unfinished")] {
+                    store.reprocess(); f.processor.requests.last!.finish(outcome)
+                    spin(0.1, until: { !store.isProcessing })
+                    store.copyDisplayedText()
+                    try check(store.result == nil && store.notice != nil && f.copied.last == "可找回的原文", "Failure changed raw or exposed unsafe output")
+                }
+                store.reprocess(); f.processor.requests.last!.finish(.success("可复制的结果"))
+                spin(0.1, until: { !store.isProcessing }); store.copyDisplayedText()
+                store.display = .original; store.copyDisplayedText()
+                try check(Array(f.copied.suffix(2)) == ["可复制的结果", "可找回的原文"], "Copy ignored selected tab")
+                f.copySucceeds = false; store.copyDisplayedText()
+                try check(store.copyNotice?.contains("失败") == true, "Clipboard failure hidden")
+            }),
+            ("Recovery: deleted custom scene fails without modifying global selection or prior result", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                var custom = f.config.modes.draft(); custom.name = "合成自定义"
+                try f.config.modes.save(custom, baseRules: f.config.modes.configuration.baseRules)
+                store.capture("合成原文"); store.selectMode(custom.id); store.reprocess()
+                try check(f.processor.requests[0].snapshot.mode.isCustom, "Custom scene missing")
+                f.processor.requests[0].finish(.success("已完成结果")); spin(0.1, until: { !store.isProcessing })
+                try f.config.modes.delete(custom.id)
+                store.reprocess()
+                try check(f.processor.requests.count == 1 && store.result == "已完成结果" && store.notice?.contains("删除") == true, "Deleted scene silently changed or erased result")
+                try check(f.config.modes.selected.builtin == .rawTranscript, "Local scene leaked to global defaults")
+            }),
+            ("Recovery: new recording synchronously cancels rerun without erasing incoming state", {
+                let activity = StateManager.shared
+                activity.transition(to: .idle)
+                defer { activity.transition(to: .idle) }
+                let f = try RecoveryFixture(activity: activity), store = f.recovery!
+                store.capture("测试原文"); store.reprocess()
+                try check(activity.currentState == .recovering && store.isProcessing && !store.inputIsBusy, "Recovery canceled its own request")
+                var installed = false
+                let updates = AppUpdateService(isBusy: { activity.isBusy() })
+                try check(updates.postponeInstallationIfBusy { installed = true }, "Update interrupted recovery")
+                activity.transition(to: .recording)
+                try check(activity.currentState == .recording && !store.isProcessing && store.inputIsBusy && !store.canReprocess, "Recovery clobbered normal recording state")
+                updates.activityDidChange()
+                try check(!installed, "Update installed during new recording")
+                f.processor.requests[0].finish(.success("迟到结果")); spin(0.1)
+                try check(store.result == nil, "Normal recording accepted late recovery result")
+                activity.transition(to: .idle); updates.activityDidChange()
+                try check(installed && store.canReprocess, "Completion did not release activity lock")
+                f.allowsStart = false; store.reprocess()
+                try check(f.processor.requests.count == 1, "Recovery started during installation")
+            }),
+            ("Recovery: original capture survives AI cancellation, rejects canceled ASR and preserves incomplete flags", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                store.capture("更早原文")
+                let vm = RecordingViewModel(snapshotProvider: { throw MiniMaxError.missingAPIKey }, modeNameProvider: { "测试" },
+                    stopCapture: {}, cancelCapture: {}, retainOriginal: { store.capture($0, mayBeIncomplete: $1) })
+                vm.retainRecognizedOriginal("最终原文 A P I", mayBeIncomplete: false)
+                vm.cancel(); vm.retainRecognizedOriginal("迟到识别", mayBeIncomplete: false)
+                try check(store.entry?.original == "最终原文 A P I", "AI cancel lost original or canceled ASR replaced it")
+                let earlyCancel = RecordingViewModel(stopCapture: {}, cancelCapture: {}, retainOriginal: { store.capture($0, mayBeIncomplete: $1) })
+                earlyCancel.cancel(); earlyCancel.retainRecognizedOriginal("不应保留", mayBeIncomplete: false)
+                try check(store.entry?.original == "最终原文 A P I", "Pre-final cancellation overwrote original")
+                let incomplete = RecordingViewModel(snapshotProvider: { throw MiniMaxError.missingAPIKey }, modeNameProvider: { "测试" },
+                    stopCapture: {}, cancelCapture: {}, retainOriginal: { store.capture($0, mayBeIncomplete: $1) })
+                incomplete.captureStopped(); incomplete.handleCloudRecognitionFailure("合成失败")
+                incomplete.retainRecognizedOriginal("部分文字", mayBeIncomplete: false)
+                try check(store.entry?.mayBeIncomplete == true && store.entry?.original == "部分文字", "Recognition failure flag lost")
+                StateManager.shared.transition(to: .idle)
+            }),
+            ("Recovery: floating entry is gated by transcript, audio speech and normal processing", {
+                let vm = RecordingViewModel(stopCapture: {}, cancelCapture: {})
+                vm.isRecording = true
+                try check(!vm.canRecoverInput, "Empty history enabled")
+                vm.hasRecoverableInput = true
+                try check(vm.canRecoverInput && vm.panelHeight == 224, "Ready entry disabled or height changed")
+                vm.hasDetectedSpeech = true
+                try check(!vm.canRecoverInput, "HTTP recording lost spoken audio before transcript")
+                vm.hasDetectedSpeech = false; vm.partialText = "非空口述"
+                try check(!vm.canRecoverInput, "ASR partial did not lock entry")
+                vm.partialText = ""; vm.isRecording = false; vm.isProcessing = true
+                try check(!vm.canRecoverInput && vm.panelHeight == 224, "Processing enabled recovery or changed height")
+            }),
+            ("Recovery: speech guard handles silent, interleaved and native float audio", {
+                for interleaved in [false, true] {
+                    for format in [AVAudioCommonFormat.pcmFormatInt16, .pcmFormatFloat32] {
+                        let audioFormat = AVAudioFormat(commonFormat: format, sampleRate: 48000, channels: 2, interleaved: interleaved)!
+                        let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: 200)!
+                        buffer.frameLength = 200
+                        for ch in 0..<(interleaved ? 1 : 2) {
+                            let length = interleaved ? 400 : 200
+                            if let data = buffer.int16ChannelData { data[ch].initialize(repeating: 0, count: length) }
+                            if let data = buffer.floatChannelData { data[ch].initialize(repeating: 0, count: length) }
+                        }
+                        try check(!PCMVoiceActivityDetector.containsMeaningfulSpeech(buffer), "Silence locked recovery")
+                        for index in 0..<10 {
+                            let ch = interleaved ? 0 : 1, offset = interleaved ? index * 2 + 1 : index
+                            buffer.int16ChannelData?[ch][offset] = 1000
+                            buffer.floatChannelData?[ch][offset] = 0.1
+                        }
+                        try check(PCMVoiceActivityDetector.containsMeaningfulSpeech(buffer), "Speech on second channel not detected")
+                    }
+                }
+            }),
+            ("Recovery: constructing views never reads keys or submits requests", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                let reads = f.config.keys.reads
+                store.capture("原文"); store.prepareForPresentation()
+                _ = InputRecoveryView(recovery: store, onClose: {}).body
+                store.selectMode(WritingScene.aiInstruction.storageID)
+                try check(f.config.keys.reads == reads && f.processor.requests.isEmpty, "UI or scene selection read credentials or submitted")
+            })
+        ]
+    }
 }

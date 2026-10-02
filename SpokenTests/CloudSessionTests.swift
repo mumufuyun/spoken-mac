@@ -55,10 +55,16 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertEqual(data.count % MemoryLayout<Int16>.size, 0)
     }
 
-    func testPostProcessorPreservesNormalChineseTerms() {
-        let text = "我们的愿景是开放源码，同时记录地图经纬度和老虎的踪迹。"
-        XCTAssertEqual(SpeechPostProcessor.postProcess(text), text)
-        XCTAssertEqual(SpeechPostProcessor.postProcess("这个八哥要调用阿皮哎"), "这个bug要调用API")
+    func testPostProcessorPreservesRecognizedWords() {
+        for text in [
+            "我们的愿景是开放源码，同时记录地图经纬度和老虎的踪迹。",
+            "我家养了一只八哥，欧凯负责照顾它。",
+            "这个八哥要调用阿皮哎",
+            "阿皮哎、爱劈唉、诶批艾、艾斯迪凯、埃斯迪凯、八哥、巴格、欧克、欧凯"
+        ] {
+            XCTAssertEqual(SpeechPostProcessor.postProcess(text), text)
+        }
+        XCTAssertEqual(SpeechPostProcessor.postProcess("调用 A P I 和 S D K"), "调用 API 和 SDK")
     }
 
     func testWarmConnectionIsReusedOnlyWhileFreshAndHealthy() {

@@ -65,6 +65,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private var lastRecognizedText = ""
     private var capturedOnPartial: ((String) -> Void)?
     private var capturedOnFinal: ((String) -> Void)?
+    private var capturedOnRawFinal: ((String, Bool) -> Void)?
+    private var capturedOnSpeechDetected: (() -> Void)?
     private var capturedOnCaptureStopped: (() -> Void)?
     private var capturedOnStartFailure: ((String) -> Void)?
     private let sessionLock = NSLock()
@@ -73,6 +75,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private var sessionAudioReceived = false
     private var sessionCloudReady = false
     private var sessionCaptureReadyNotified = false
+    private var sessionHasSpeech = false
 
     private var retryWorkItem: DispatchWorkItem?
 
@@ -108,6 +111,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         sessionAudioReceived = false
         sessionCloudReady = false
         sessionCaptureReadyNotified = false
+        sessionHasSpeech = false
         sessionLock.unlock()
         return id
     }
@@ -116,6 +120,28 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         sessionLock.lock()
         defer { sessionLock.unlock() }
         return activeSessionID == id
+    }
+
+    var hasSpeechInCurrentSession: Bool {
+        sessionLock.lock(); defer { sessionLock.unlock() }
+        return activeSessionID != nil && sessionHasSpeech
+    }
+
+    private func markSpeechDetected(for id: UUID) {
+        sessionLock.lock()
+        guard activeSessionID == id, !sessionHasSpeech else { sessionLock.unlock(); return }
+        sessionHasSpeech = true
+        let callback = capturedOnSpeechDetected
+        sessionLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            guard self?.isActiveSession(id) == true else { return }
+            callback?()
+        }
+    }
+
+    private func observeSpeech(_ buffer: AVAudioPCMBuffer, sessionID: UUID) {
+        guard !hasSpeechInCurrentSession else { return }
+        if PCMVoiceActivityDetector.containsMeaningfulSpeech(buffer) { markSpeechDetected(for: sessionID) }
     }
 
     private func currentSessionID() -> UUID? {
@@ -401,6 +427,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     func startRecording(
         onPartial: @escaping (String) -> Void,
         onFinal: @escaping (String) -> Void,
+        onRawFinal: @escaping (String, Bool) -> Void = { _, _ in },
+        onSpeechDetected: @escaping () -> Void = {},
         onAudioBuffered: @escaping () -> Void = {},
         onCaptureReady: @escaping () -> Void = {},
         onCaptureStopped: @escaping () -> Void = {},
@@ -424,6 +452,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         let rawValue = UserDefaults.standard.string(forKey: "speechRecognitionProvider") ?? SpeechRecognitionProvider.local.rawValue
         let provider = SpeechRecognitionProvider(rawValue: rawValue) ?? .local
         currentProvider = provider
+        capturedOnRawFinal = onRawFinal
+        capturedOnSpeechDetected = onSpeechDetected
         let sessionID = beginSession()
         capturedOnStartFailure = onStartFailure
         capturedOnCaptureStopped = onCaptureStopped
@@ -529,6 +559,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             onPartial: { [weak self] text in
                 guard let self, self.isActiveSession(sessionID) else { return }
                 self.lastRecognizedText = text
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.markSpeechDetected(for: sessionID) }
                 DispatchQueue.main.async {
                     guard self.isActiveSession(sessionID) else { return }
                     self.capturedOnPartial?(text)
@@ -536,7 +567,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             },
             onFinal: { [weak self] text in
                 guard let self, self.isActiveSession(sessionID) else { return }
-                self.lastRecognizedText = SpeechPostProcessor.postProcess(text)
+                self.lastRecognizedText = text
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.markSpeechDetected(for: sessionID) }
             },
             onError: { [weak self] error in
                 guard let self, self.isActiveSession(sessionID) else { return }
@@ -635,6 +667,9 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             let pcmData = converter?.convert(buffer)
                 ?? StreamingASRPCMConverter.data(fromCanonicalBuffer: buffer)
             guard let pcmData else { return }
+            if !self.hasSpeechInCurrentSession, PCMVoiceActivityDetector.containsMeaningfulSpeech(pcmData) {
+                self.markSpeechDetected(for: sessionID)
+            }
             let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
             CloudSpeechService.shared.sendAudio(pcmData)
             if isFirstAudioFrame {
@@ -883,6 +918,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             var tapFormat: AVAudioFormat? = speechFormat
             var tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: tapFormat) { [weak self] buffer, _ in
                 guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
+                self.observeSpeech(buffer, sessionID: sessionID)
                 recognitionRequest.append(buffer)
                 if self.markAudioReceived(for: sessionID) {
                     DispatchQueue.main.async(execute: onCaptureReady)
@@ -894,6 +930,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                 tapFormat = nil
                 tapInstalled = safeInstallTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
                     guard let self = self, self.isAcceptingAudio(for: sessionID) else { return }
+                    self.observeSpeech(buffer, sessionID: sessionID)
                     recognitionRequest.append(buffer)
                     if self.markAudioReceived(for: sessionID) {
                         DispatchQueue.main.async(execute: onCaptureReady)
@@ -1000,21 +1037,21 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         let text = result.bestTranscription.formattedString
         if !text.isEmpty {
             lastRecognizedText = text
+            markSpeechDetected(for: sessionID)
             logInfo("partial result length=\(text.count)")
             PipelineLatencyMetrics.shared.mark(.firstASRPartial)
             capturedOnPartial?(text)
         }
         if result.isFinal {
-            let processedText = SpeechPostProcessor.postProcess(text)
-            logInfo("final result length=\(processedText.count)")
-            stopAndFinish(lastText: processedText)
+            logInfo("final result length=\(text.count)")
+            stopAndFinish(lastText: text.isEmpty ? lastRecognizedText : text, isFinalResult: !text.isEmpty)
         }
     }
 
     // MARK: - 停止录音
 
     /// 正常停止录音（静音触发或用户主动停止），会触发 onFinal 回调
-    private func stopAndFinish(lastText: String) {
+    private func stopAndFinish(lastText: String, isFinalResult: Bool = false) {
         guard state == .recording || state == .starting else { return }
         guard !isStopping else { return }
         guard let sessionID = currentSessionID() else { return }
@@ -1027,7 +1064,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         if stoppedDuringPreparation {
             // No running audio engine yet: cancel startup/retries instead of waiting for ASR.
             if isUsingCloud { CloudSpeechService.shared.disconnect() }
-            completeStoppedRecording(text: lastText)
+            completeStoppedRecording(text: lastText, mayBeIncomplete: !isFinalResult)
             return
         }
 
@@ -1041,26 +1078,27 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                     cloudText: cloudText,
                     latestPartial: self.lastRecognizedText.isEmpty ? lastText : self.lastRecognizedText
                 )
-                self.completeStoppedRecording(text: bestText)
+                self.completeStoppedRecording(text: bestText, mayBeIncomplete: cloudText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
             }
             return
         }
 
         cleanupResources()
-        completeStoppedRecording(text: lastText)
+        completeStoppedRecording(text: lastText, mayBeIncomplete: !isFinalResult)
     }
 
-    private func completeStoppedRecording(text: String) {
-        let processed = SpeechPostProcessor.postProcess(
-            text.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        logInfo("stopAndFinish: finalTextLength=\(processed.count)")
+    private func completeStoppedRecording(text: String, mayBeIncomplete: Bool) {
         PipelineLatencyMetrics.shared.mark(.asrFinal)
         cleanupResources()
         state = .idle
         lastRecordingEndTime = Date()
         let callback = capturedOnFinal
+        let rawCallback = capturedOnRawFinal
         invalidateSession()
+        // Preserve the ASR source before local formatting, AI, or a subsequent cancellation.
+        rawCallback?(text, mayBeIncomplete)
+        let processed = SpeechPostProcessor.postProcess(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        logInfo("stopAndFinish: finalTextLength=\(processed.count)")
         callback?(processed)
     }
 

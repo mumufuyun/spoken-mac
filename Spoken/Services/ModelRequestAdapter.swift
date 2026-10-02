@@ -66,8 +66,16 @@ struct AIProcessingSnapshot {
     let apiKey: String
 
     static func capture(modes: ModeStore, connections: ModelConnectionStore,
-                        defaults: UserDefaults = .standard) throws -> AIProcessingSnapshot {
-        let mode = modes.selected
+                        defaults: UserDefaults = .standard, modeID: String? = nil) throws -> AIProcessingSnapshot {
+        let mode: ModeDefinition
+        if let modeID {
+            guard let selected = modes.modes.first(where: { $0.id == modeID }) else {
+                throw ConfigurationError.invalid("所选场景已删除，请重新选择")
+            }
+            mode = selected
+        } else {
+            mode = modes.selected
+        }
         let language = TranslateLanguage(rawValue: defaults.string(forKey: "translateLang") ?? "") ?? .original
         if let error = modes.loadError ?? connections.loadError { throw ConfigurationError.unavailable(error) }
         let enabled = defaults.object(forKey: PersonalContextStore.enabledKey) == nil || defaults.bool(forKey: PersonalContextStore.enabledKey)
