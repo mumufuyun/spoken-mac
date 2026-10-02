@@ -1,0 +1,62 @@
+{
+  "version": "2.4.2",
+  "build": "242.1",
+  "source_commit": "7eefe9e8cc5d42590a320b36dd3b0957f0e98cb3",
+  "prompt_candidate": "candidate-13",
+  "configuration_version": 7,
+  "prompt_snapshot_parity": "passed for all seven compiled scenes",
+  "offline_tests": "164/164 passed",
+  "app_build": "passed",
+  "dmg_integrity": "passed",
+  "installer_sha256": "947f182a97871f9646aec4a032696be2df509cee9fbd6da461d42945962b7db3",
+  "local_installation": {
+    "path": "/Applications/Spoken.app",
+    "running": true,
+    "signature_verified": true,
+    "active_new_builtin_modes": 7,
+    "user_requested_ai_instruction_refresh": true,
+    "previous_application_and_rules_backed_up": true,
+    "other_configurations_unchanged": true
+  },
+  "website": {
+    "commit": "c5340f1c7f52b05cf14c9fb1bfb8aba3c72471aa",
+    "cloudflare_check": "success",
+    "tests": "13/13 passed",
+    "production_build": "passed",
+    "domains": [
+      "https://spoken-web-v2.pages.dev",
+      "https://spoken.linding.asia"
+    ],
+    "browser": "2.4.2 download shown; no updater feature UI or browser errors",
+    "signed_production_artifacts": [
+      {
+        "path": "updates/release.json",
+        "sha256": "386408768201d29ad312dec7f6125cb51df8a95087d06ef433bec7367140dbd6",
+        "size": 1462
+      },
+      {
+        "path": "updates/appcast.xml",
+        "sha256": "8e215bc2a7000f057abe1bae0e7d0440a6aeef3bf4ff39d97140c486ec8c7b04",
+        "size": 4932
+      },
+      {
+        "path": "Spoken-2.4.2-arm64.dmg",
+        "sha256": "947f182a97871f9646aec4a032696be2df509cee9fbd6da461d42945962b7db3",
+        "size": 3883998
+      },
+      {
+        "path": "Spoken-2.4.2-arm64.dmg.sha256",
+        "sha256": "1d566e511baed001869076aa1d9f95e5ac7b833a7423c9c8584ccc386718d755",
+        "size": 89
+      }
+    ],
+    "signature_verification": "passed on downloaded feed and installer"
+  },
+  "github_release": "https://github.com/mumufuyun/spoken-mac/releases/tag/v2.4.2",
+  "github_digest_matches": true,
+  "model_evaluation": "Uses the accepted candidate-13 fixed tuned-set result (184/194); no new paid model run",
+  "limitations": [
+    "Ad-hoc app signing; no Apple notarization",
+    "Live microphone, model provider calls and cross-app input were not retested in this release"
+  ]
+}
