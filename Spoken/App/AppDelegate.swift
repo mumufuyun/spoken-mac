@@ -421,12 +421,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showRecoveryPanel() {
         let recovery = InputRecoveryStore.shared
         guard recordingViewModel.canRecoverInput, recovery.entry != nil,
-              !SpeechService.shared.hasSpeechInCurrentSession, !AppUpdateService.shared.isInstalling else { return }
+              !AppUpdateService.shared.isInstalling else { return }
         let origin = recordingPanel?.frame.origin
         let targetApp = recordingViewModel.targetApplication ?? frontmostAppBeforeHotKey
         let inputTarget = inputTargetBeforeHotKey
         // Cancel capture before showing recovery. This invalidates late ASR callbacks and
-        // deliberately keeps the retained original when the new recording was still empty.
+        // keeps the previous original even if this recording already produced partial speech.
         recordingViewModel.cancel()
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
@@ -690,8 +690,7 @@ class RecordingViewModel: ObservableObject {
     @Published var hasRecoverableInput = false
     var onRecover: (() -> Void)?
     var canRecoverInput: Bool {
-        hasRecoverableInput && isRecording && !isProcessing && !isCancelled && !hasDetectedSpeech
-            && partialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        hasRecoverableInput && isRecording && !isProcessing && !isCancelled
     }
     private(set) var fallbackNotice: String?
     private var recognitionFailure: String?
@@ -1043,7 +1042,7 @@ struct RecordingPanelView: View {
                     Label("找回上次输入", systemImage: "arrow.uturn.backward")
                 }.controlSize(.small)
                     .disabled(!viewModel.canRecoverInput)
-                    .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "停止本轮录音并找回上次输入" : "录音或处理已开始，完成或取消后可找回"))
+                    .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "取消本轮录音并找回上次输入" : "正在处理或已取消，请重新唤起录音后找回"))
                 Spacer(minLength: 0)
                 Text(hotkeys.isRegistered ? "\(hotkeys.displayName)\(viewModel.isRecording ? "完成" : "取消") · Esc 取消" : "快捷键不可用 · Esc 取消")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)

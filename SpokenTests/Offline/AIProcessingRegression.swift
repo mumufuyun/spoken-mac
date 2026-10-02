@@ -1376,6 +1376,8 @@ private extension AIProcessingRegression {
             try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-recovery-ready-\(theme)",
                        size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
             vm.hasDetectedSpeech = true
+            vm.partialText = "环境声触发的临时识别"
+            vm.statusText = vm.partialText
             try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-recovery-speaking-\(theme)",
                        size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
             let recoveryFixture = try RecoveryFixture()
@@ -1508,7 +1510,14 @@ private struct InteractiveSmokeView: View {
             HStack {
                 Text("模拟输出：" + output).font(.caption).textSelection(.enabled)
                 Spacer()
-                if let recordingModel { Button("完成合成语音") { recordingModel.stopRecording() } }
+                if let recordingModel {
+                    Button("模拟误识别") {
+                        recordingModel.hasDetectedSpeech = true
+                        recordingModel.partialText = "环境声触发的临时识别"
+                        recordingModel.statusText = recordingModel.partialText
+                    }
+                    Button("完成合成语音") { recordingModel.stopRecording() }
+                }
             }.padding(10)
         }
         .onChange(of: failWrites) { _, failing in fixture.failingFiles = failing ? ["modes", "connections", "hotkey-v1"] : [] }
@@ -2754,20 +2763,55 @@ private extension AIProcessingRegression {
                 try check(store.entry?.mayBeIncomplete == true && store.entry?.original == "部分文字", "Recognition failure flag lost")
                 StateManager.shared.transition(to: .idle)
             }),
-            ("Recovery: floating entry is gated by transcript, audio speech and normal processing", {
+            ("Recovery: floating entry stays available after audio and partial recognition", {
                 let vm = RecordingViewModel(stopCapture: {}, cancelCapture: {})
                 vm.isRecording = true
                 try check(!vm.canRecoverInput, "Empty history enabled")
                 vm.hasRecoverableInput = true
                 try check(vm.canRecoverInput && vm.panelHeight == 224, "Ready entry disabled or height changed")
                 vm.hasDetectedSpeech = true
-                try check(!vm.canRecoverInput, "HTTP recording lost spoken audio before transcript")
+                try check(vm.canRecoverInput, "Audio or noise disabled recovery before transcript")
                 vm.hasDetectedSpeech = false; vm.partialText = "非空口述"
-                try check(!vm.canRecoverInput, "ASR partial did not lock entry")
+                try check(vm.canRecoverInput, "Partial recognition disabled recovery")
+                vm.hasDetectedSpeech = true
+                try check(vm.canRecoverInput, "Combined speech and transcript disabled recovery")
+                vm.isCaptureReady = false; vm.isAudioBuffered = true
+                try check(vm.canRecoverInput, "Buffered recording disabled recovery")
                 vm.partialText = ""; vm.isRecording = false; vm.isProcessing = true
                 try check(!vm.canRecoverInput && vm.panelHeight == 224, "Processing enabled recovery or changed height")
+                vm.isRecording = true; vm.isProcessing = false; vm.isCancelled = true
+                try check(!vm.canRecoverInput, "Canceled session enabled recovery")
             }),
-            ("Recovery: speech guard handles silent, interleaved and native float audio", {
+            ("Recovery: choosing last input after misrecognition cancels without retaining or injecting this recording", {
+                let f = try RecoveryFixture(), store = f.recovery!, transport = Fixture()
+                store.capture("需要找回的上一次原文")
+                let previousID = store.entry?.id
+                let reference = WeakRecordingModel()
+                var canceled = 0, stopped = 0, injected: [String] = []
+                let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "Canceled recording must not process") },
+                    modeNameProvider: { "测试" }, processor: transport.service(), stopCapture: { stopped += 1 },
+                    cancelCapture: {
+                        canceled += 1
+                        reference.value?.retainRecognizedOriginal("取消时到达的误识别", mayBeIncomplete: false)
+                        reference.value?.processAndInput("取消时到达的误识别")
+                    }, retainOriginal: { store.capture($0, mayBeIncomplete: $1) })
+                reference.value = vm
+                vm.isRecording = true; vm.isCaptureReady = true; vm.hasRecoverableInput = true
+                vm.hasDetectedSpeech = true; vm.partialText = "环境声触发的临时识别"
+                vm.onComplete = { text, _ in injected.append(text) }
+                vm.onRecover = { reference.value?.cancel(); store.prepareForPresentation() }
+                try check(vm.canRecoverInput, "Misrecognition prevented opening recovery")
+                vm.onRecover?()
+                vm.retainRecognizedOriginal("取消后迟到的原文", mayBeIncomplete: false)
+                vm.processAndInput("取消后迟到的识别结果")
+                vm.finishAIProcessing(.success("取消后迟到的整理结果"), originalText: "误识别")
+                try check(canceled == 1 && stopped == 0 && vm.isCancelled && !vm.isRecording,
+                          "Recovery finalized the discarded recording instead of canceling it")
+                store.copyDisplayedText()
+                try check(store.entry?.id == previousID && f.copied == ["需要找回的上一次原文"] && injected.isEmpty,
+                          "Discarded speech overwrote history or entered the target input")
+            }),
+            ("Recovery: speech activity handles silent, interleaved and native float audio", {
                 for interleaved in [false, true] {
                     for format in [AVAudioCommonFormat.pcmFormatInt16, .pcmFormatFloat32] {
                         let audioFormat = AVAudioFormat(commonFormat: format, sampleRate: 48000, channels: 2, interleaved: interleaved)!
@@ -2778,7 +2822,7 @@ private extension AIProcessingRegression {
                             if let data = buffer.int16ChannelData { data[ch].initialize(repeating: 0, count: length) }
                             if let data = buffer.floatChannelData { data[ch].initialize(repeating: 0, count: length) }
                         }
-                        try check(!PCMVoiceActivityDetector.containsMeaningfulSpeech(buffer), "Silence locked recovery")
+                        try check(!PCMVoiceActivityDetector.containsMeaningfulSpeech(buffer), "Silence detected as speech")
                         for index in 0..<10 {
                             let ch = interleaved ? 0 : 1, offset = interleaved ? index * 2 + 1 : index
                             buffer.int16ChannelData?[ch][offset] = 1000
