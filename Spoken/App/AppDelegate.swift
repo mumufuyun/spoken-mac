@@ -1027,7 +1027,7 @@ struct RecordingPanelView: View {
             HStack(spacing: 8) {
                 Button { viewModel.onRecover?() } label: {
                     Label("找回上次输入", systemImage: "arrow.uturn.backward")
-                }.buttonStyle(.plain).font(.caption).foregroundStyle(SpokenTheme.accent)
+                }.controlSize(.small)
                     .disabled(!viewModel.canRecoverInput)
                     .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "停止本轮录音并找回上次输入" : "录音或处理已开始，完成或取消后可找回"))
                 Spacer(minLength: 0)
