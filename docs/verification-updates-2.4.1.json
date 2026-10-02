@@ -1,0 +1,60 @@
+{
+  "version": "2.4.1",
+  "build": "241.1",
+  "source_commit": "f6ec8edf7ab8db3843ec961c1a4cc6988588ea3c",
+  "installer_sha256": "e98e5aa177be7c041d39570892a85780adde1658153bd614ea996b18908f76e0",
+  "local_build": "passed",
+  "dmg_integrity": "passed",
+  "installed_app": {
+    "path": "/Applications/Spoken.app",
+    "version": "2.4.1",
+    "build": "241.1",
+    "signature": "passed",
+    "running": true,
+    "old_app_and_configuration_backed_up": true,
+    "configuration_files_preserved": 5,
+    "configuration_unchanged_after_launch": true,
+    "automatic_check_time": "2026-10-02 12:35:56 +0000"
+  },
+  "website": {
+    "commit": "17d669fe8a9a1caa6d21fbf0bd8393ad133cfcd8",
+    "deployment": "success",
+    "tests": "13/13 passed",
+    "static_production_build": "passed",
+    "domains": [
+      "https://spoken-web-v2.pages.dev",
+      "https://spoken.linding.asia"
+    ],
+    "update_feature_presentation": false,
+    "production_signature_verification": "passed",
+    "artifacts": [
+      {
+        "path": "updates/release.json",
+        "sha256": "76aa6c1b6c45840a421ebfa2b16884c4019e421c7eb9178105ea1ba383288ccf",
+        "size": 668
+      },
+      {
+        "path": "updates/appcast.xml",
+        "sha256": "64c39815b41609e25d8841f81052d069a3598df18db216164b3c50c2a5ee0f36",
+        "size": 3003
+      },
+      {
+        "path": "Spoken-2.4.1-arm64.dmg",
+        "sha256": "e98e5aa177be7c041d39570892a85780adde1658153bd614ea996b18908f76e0",
+        "size": 3023125
+      },
+      {
+        "path": "Spoken-2.4.1-arm64.dmg.sha256",
+        "sha256": "d4025039d11757d575907e15187542d434e30ef002d26ab39f750674b4b8481b",
+        "size": 89
+      }
+    ]
+  },
+  "github_release": "https://github.com/mumufuyun/spoken-mac/releases/tag/v2.4.1",
+  "github_asset_digest_matches": true,
+  "scope": "Version bump and repackaging only; functional code unchanged from 2.4.0",
+  "limitations": [
+    "Ad-hoc app signature; no Apple notarization",
+    "Live microphone, model services and cross-app text input not retested during packaging"
+  ]
+}
