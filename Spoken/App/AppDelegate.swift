@@ -247,10 +247,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 print("Spoken: [DEBUG] System will sleep, disconnecting cloud speech")
-                CloudSpeechService.shared.disconnect()
                 if self?.recordingPanel?.isVisible == true {
                     self?.recordingViewModel.cancel()
                 }
+                CloudSpeechService.shared.disconnect()
             }
         }
 
@@ -282,10 +282,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 let previous = self.networkSignature
                 self.networkSignature = signature
                 guard let previous, previous != signature else { return }
-                guard self.stateManager.currentState != .recording,
-                      self.stateManager.currentState != .starting,
-                      self.stateManager.currentState != .cloudRecognizing else {
-                    print("Spoken: [DEBUG] Network path changed during recording; provider retry policy remains active")
+                guard self.stateManager.isIdle() else {
+                    print("Spoken: [DEBUG] Network path changed while busy; preserving the active speech session")
                     return
                 }
                 print("Spoken: [DEBUG] Network path changed, rebuilding cloud speech warm connection")
@@ -894,6 +892,9 @@ class RecordingViewModel: ObservableObject {
 
     func retainRecognizedOriginal(_ text: String, mayBeIncomplete: Bool) {
         guard !isCancelled, !hasSubmitted else { return }
+        if mayBeIncomplete, recognitionFailure == nil {
+            recognitionFailure = "语音识别未完整结束"
+        }
         retainOriginal(text, mayBeIncomplete || recognitionFailure != nil)
     }
 
@@ -931,7 +932,7 @@ class RecordingViewModel: ObservableObject {
         }
         if recognitionFailure != nil {
             isProcessing = false
-            fallbackNotice = "云端识别未完整结束，已保留已识别文字，请核对是否有遗漏。"
+            fallbackNotice = "语音识别未完整结束，已保留已识别文字，请核对是否有遗漏。"
             onComplete?(text, frontmostApp)
             return
         }

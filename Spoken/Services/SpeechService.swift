@@ -10,6 +10,17 @@ enum SpeechRecognitionProvider: String, CaseIterable {
     case auto = "自动选择"
 }
 
+protocol LocalSpeechAudioEnding: AnyObject {
+    func endAudio()
+}
+
+protocol LocalSpeechTaskCancelling: AnyObject {
+    func cancel()
+}
+
+extension SFSpeechAudioBufferRecognitionRequest: LocalSpeechAudioEnding {}
+extension SFSpeechRecognitionTask: LocalSpeechTaskCancelling {}
+
 final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
     private final class PermissionResults: @unchecked Sendable {
         private let lock = NSLock()
@@ -49,8 +60,14 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     private var audioEngine: AVAudioEngine = AVAudioEngine()
     private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: LocalSpeechTaskCancelling?
+    private var recognitionRequest: LocalSpeechAudioEnding?
+    private var localFinishTimeout: TimeInterval = 5
+    private var localFinishTimeoutItem: DispatchWorkItem?
+    private var cloudService = CloudSpeechService.shared
+    #if SPOKEN_OFFLINE_TESTS
+    private var skipsAudioHardware = false
+    #endif
 
     private enum RecordingState {
         case idle
@@ -369,10 +386,21 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - 资源清理
 
+    private func stopAudioCapture(reset: Bool = false) {
+        #if SPOKEN_OFFLINE_TESTS
+        if skipsAudioHardware { return }
+        #endif
+        safeRemoveTap(onBus: 0)
+        if audioEngine.isRunning { audioEngine.stop() }
+        if reset { audioEngine.reset() }
+    }
+
     private func cleanupResources() {
         // 取消待执行的重试任务
         retryWorkItem?.cancel()
         retryWorkItem = nil
+        localFinishTimeoutItem?.cancel()
+        localFinishTimeoutItem = nil
 
         // 清理识别任务
         recognitionTask?.cancel()
@@ -385,11 +413,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         recognitionRequest = nil
 
         // 安全清理音频引擎（removeTap 可能抛出 NSException）
-        safeRemoveTap(onBus: 0)
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        audioEngine.reset()
+        stopAudioCapture(reset: true)
 
         isUsingCloud = false
     }
@@ -493,7 +517,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             return
         }
         logInfo("prepareCloudConnection called")
-        CloudSpeechService.shared.preconnect()
+        cloudService.preconnect()
     }
 
     // MARK: - 云端识别
@@ -527,7 +551,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
         // 先创建云端逻辑会话，再启动音频引擎。这样 tap 收到的第一帧就能进入
         // Provider 的本地缓存，不依赖 WebSocket 是否已经完成握手。
-        CloudSpeechService.shared.onConnected = { [weak self] in
+        cloudService.onConnected = { [weak self] in
             guard let self, self.isActiveSession(sessionID) else { return }
             self.logInfo("CloudSpeechService session ready")
             let shouldNotifyCaptureReady = self.markCloudReadyAndShouldNotify(for: sessionID)
@@ -539,7 +563,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         }
 
         cancellables.removeAll()
-        CloudSpeechService.shared.$connectionState
+        cloudService.$connectionState
             .receive(on: DispatchQueue.main)
             .removeDuplicates()
             .sink { [weak self] state in
@@ -554,7 +578,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             }
             .store(in: &cancellables)
 
-        CloudSpeechService.shared.connect(
+        cloudService.connect(
             snapshot: cloudSnapshot,
             onPartial: { [weak self] text in
                 guard let self, self.isActiveSession(sessionID) else { return }
@@ -578,7 +602,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                 self.onCloudConnectionFailed?(error.localizedDescription)
                 // Provider 已经用完重试机会，同时清掉调度层持有的旧会话，
                 // 避免下一次录音误用失效连接。
-                CloudSpeechService.shared.disconnect()
+                cloudService.disconnect()
                 if allowFallback && self.state != .stopping && self.state != .cancelled {
                     ASRStabilityMetrics.shared.recordLocalFallback()
                     self.cleanupResources()
@@ -599,7 +623,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
         if !tapInstalled {
             logError("Failed to install cloud tap on audio engine")
-            CloudSpeechService.shared.disconnect()
+            cloudService.disconnect()
             if allowFallback {
                 logInfo("auto fallback to local")
                 currentProvider = .local
@@ -617,7 +641,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             PipelineLatencyMetrics.shared.mark(.audioEngineStarted)
         } catch {
             logError("Audio engine failed to start: \(error)")
-            CloudSpeechService.shared.disconnect()
+            cloudService.disconnect()
             if scheduleCloudAudioEngineRetry(
                 onPartial: onPartial,
                 onFinal: onFinal,
@@ -671,7 +695,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
                 self.markSpeechDetected(for: sessionID)
             }
             let isFirstAudioFrame = self.markAudioReceived(for: sessionID)
-            CloudSpeechService.shared.sendAudio(pcmData)
+            cloudService.sendAudio(pcmData)
             if isFirstAudioFrame {
                 DispatchQueue.main.async(execute: onAudioBuffered)
             }
@@ -775,7 +799,7 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         let nextAttempt = restartAttempt + 1
         guard nextAttempt < audioEngineStartMaxAttempts else {
             Self.unifiedLogger.error("cloud audio capture delivered no frames after \(audioEngineStartMaxAttempts) attempts")
-            CloudSpeechService.shared.disconnect()
+            cloudService.disconnect()
             if allowFallback {
                 logInfo("auto fallback to local")
                 cleanupResources()
@@ -992,7 +1016,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
 
             self.recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
                 DispatchQueue.main.async {
-                    self?.handleLocalRecognition(result: result, error: error, sessionID: sessionID)
+                    self?.handleLocalRecognition(text: result?.bestTranscription.formattedString,
+                        isFinal: result?.isFinal == true, error: error, sessionID: sessionID)
                 }
             }
 
@@ -1013,9 +1038,30 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         attemptStart(retryCount: 0)
     }
 
-    private func handleLocalRecognition(result: SFSpeechRecognitionResult?, error: Error?, sessionID: UUID) {
+    private func handleLocalRecognition(text: String?, isFinal: Bool, error: Error?, sessionID: UUID) {
         guard isActiveSession(sessionID) else { return }
+        if let text, !text.isEmpty {
+            lastRecognizedText = text
+            markSpeechDetected(for: sessionID)
+            logInfo("partial result length=\(text.count)")
+            PipelineLatencyMetrics.shared.mark(.firstASRPartial)
+            capturedOnPartial?(text)
+        }
+        if isFinal {
+            let bestText = text?.isEmpty == false ? text! : lastRecognizedText
+            if state == .stopping {
+                completeStoppedRecording(text: bestText, mayBeIncomplete: text?.isEmpty != false)
+            } else {
+                stopAndFinish(lastText: bestText, isFinalResult: text?.isEmpty == false)
+            }
+            return
+        }
         if let error {
+            if state == .stopping {
+                logWarn("Local recognition failed while finishing: \(error.localizedDescription)")
+                completeStoppedRecording(text: lastRecognizedText, mayBeIncomplete: true)
+                return
+            }
             let desc = error.localizedDescription.lowercased()
             if desc.contains("cancel") || desc.contains("end") {
                 logInfo("recognitionTask ended: \(error.localizedDescription)")
@@ -1029,22 +1075,8 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             return
         }
 
-        guard let result else {
+        if text == nil {
             logWarn("recognitionTask callback with nil result and nil error")
-            return
-        }
-
-        let text = result.bestTranscription.formattedString
-        if !text.isEmpty {
-            lastRecognizedText = text
-            markSpeechDetected(for: sessionID)
-            logInfo("partial result length=\(text.count)")
-            PipelineLatencyMetrics.shared.mark(.firstASRPartial)
-            capturedOnPartial?(text)
-        }
-        if result.isFinal {
-            logInfo("final result length=\(text.count)")
-            stopAndFinish(lastText: text.isEmpty ? lastRecognizedText : text, isFinalResult: !text.isEmpty)
         }
     }
 
@@ -1059,20 +1091,21 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         PipelineLatencyMetrics.shared.mark(.stopRequested)
         stopAcceptingAudio(for: sessionID)
         state = .stopping
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
         capturedOnCaptureStopped?()
 
         if stoppedDuringPreparation {
             // No running audio engine yet: cancel startup/retries instead of waiting for ASR.
-            if isUsingCloud { CloudSpeechService.shared.disconnect() }
+            if isUsingCloud { cloudService.disconnect() }
             completeStoppedRecording(text: lastText, mayBeIncomplete: !isFinalResult)
             return
         }
 
         if isUsingCloud {
             // 先停止采集，确保不会在 commit 之后继续追加音频。
-            safeRemoveTap(onBus: 0)
-            if audioEngine.isRunning { audioEngine.stop() }
-            CloudSpeechService.shared.finish { [weak self] cloudText in
+            stopAudioCapture()
+            cloudService.finish { [weak self] cloudText in
                 guard let self, self.isActiveSession(sessionID), self.state == .stopping else { return }
                 let bestText = CloudRecognitionResultResolver.best(
                     cloudText: cloudText,
@@ -1083,8 +1116,21 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             return
         }
 
-        cleanupResources()
-        completeStoppedRecording(text: lastText, mayBeIncomplete: !isFinalResult)
+        if isFinalResult {
+            completeStoppedRecording(text: lastText, mayBeIncomplete: false)
+            return
+        }
+
+        // Stop the microphone, but let Speech finish audio it has already accepted.
+        stopAudioCapture()
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.isActiveSession(sessionID), self.state == .stopping else { return }
+            self.logWarn("Local final recognition timed out; preserving incomplete transcript")
+            self.completeStoppedRecording(text: self.lastRecognizedText, mayBeIncomplete: true)
+        }
+        localFinishTimeoutItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + localFinishTimeout, execute: timeout)
+        recognitionRequest?.endAudio()
     }
 
     private func completeStoppedRecording(text: String, mayBeIncomplete: Bool) {
@@ -1110,11 +1156,10 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
             return
         }
 
-        if isUsingCloud {
-            CloudSpeechService.shared.disconnect()
-        }
-
         invalidateSession()
+        if isUsingCloud {
+            cloudService.disconnect()
+        }
         cleanupResources()
         state = .idle
         lastRecordingEndTime = Date()
@@ -1138,3 +1183,39 @@ final class SpeechService: NSObject, ObservableObject, @unchecked Sendable {
         return isRecording
     }
 }
+
+#if SPOKEN_OFFLINE_TESTS
+// Exercise the real stop/cancel/result paths without opening a microphone or Speech task.
+extension SpeechService {
+    convenience init(offlineCloudService: CloudSpeechService? = nil, localFinishTimeout: TimeInterval = 0.1) {
+        self.init()
+        skipsAudioHardware = true
+        self.localFinishTimeout = localFinishTimeout
+        if let offlineCloudService { cloudService = offlineCloudService }
+    }
+
+    func beginOfflineCapture(
+        cloud: Bool = false,
+        preparing: Bool = false,
+        request: LocalSpeechAudioEnding? = nil,
+        task: LocalSpeechTaskCancelling? = nil,
+        onStopped: @escaping () -> Void = {},
+        onRawFinal: @escaping (String, Bool) -> Void,
+        onFinal: @escaping (String) -> Void
+    ) -> (String?, Bool, Error?) -> Void {
+        precondition(state == .idle)
+        let id = beginSession()
+        state = preparing ? .starting : .recording
+        isUsingCloud = cloud
+        lastRecognizedText = ""
+        recognitionRequest = request
+        recognitionTask = task
+        capturedOnCaptureStopped = onStopped
+        capturedOnRawFinal = onRawFinal
+        capturedOnFinal = onFinal
+        return { [weak self] text, final, error in
+            self?.handleLocalRecognition(text: text, isFinal: final, error: error, sessionID: id)
+        }
+    }
+}
+#endif

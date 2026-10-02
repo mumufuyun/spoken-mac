@@ -424,7 +424,7 @@ private struct AIProcessingRegression {
                 vm.finishAIProcessing(.success("迟到正文"), originalText: input)
                 try check(outputs.count == count, "Cancelled ViewModel emitted text")
             })
-        ] + configurationTests() + personalContextTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests()
+        ] + configurationTests() + personalContextTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests() + speechFinalizationTests()
         var failures = 0
         for (name, test) in tests {
             do { try test(); print("PASS: \(name)") }
@@ -558,13 +558,17 @@ private extension AIProcessingRegression {
                 var renamed = first; renamed.name = "我的问答"
                 try f.modes.save(renamed, baseRules: f.modes.configuration.baseRules)
                 try check(f.modes.selected.id == first.id && f.modes.selected.name == renamed.name, "Rename changed identity")
-                for _ in 0..<2 { try f.modes.save(f.modes.draft(), baseRules: f.modes.configuration.baseRules) }
+                for _ in 0..<5 { try f.modes.save(f.modes.draft(), baseRules: f.modes.configuration.baseRules) }
                 try mustThrow { try f.modes.save(f.modes.draft(), baseRules: f.modes.configuration.baseRules) }
+                try mustThrow { try f.modes.save(f.modes.draft(copying: first), baseRules: f.modes.configuration.baseRules) }
+                renamed.sceneRules = "回答问题，先给结论。"
+                try f.modes.save(renamed, baseRules: f.modes.configuration.baseRules)
                 let reloaded = ModeStore(defaults: f.defaults, file: f.file("modes"), backupFile: f.file("backup"))
-                try check(reloaded.customModes.count == 3 && reloaded.selected.id == first.id, "Restart lost custom modes")
+                try check(reloaded.customModes.count == 6 && reloaded.selected == renamed, "Restart lost custom modes or edits at the limit")
                 try reloaded.delete(first.id)
                 try check(reloaded.selected.builtin == .rawTranscript, "Deleted selected mode did not fall back to raw")
-                try reloaded.save(reloaded.draft(), baseRules: reloaded.configuration.baseRules)
+                try reloaded.save(reloaded.draft(copying: reloaded.customModes[0]), baseRules: reloaded.configuration.baseRules)
+                try check(reloaded.customModes.count == 6, "Deleting did not release a custom mode slot")
                 try mustThrow { try reloaded.delete(WritingScene.aiInstruction.storageID) }
             }),
             ("Mode validation rejects blank names, duplicate names and empty rules", {
@@ -1384,6 +1388,9 @@ private extension AIProcessingRegression {
         let fixture = ConfigurationFixture()
         for (name, rules) in [("英文邮件", "把语音整理为一封自然、简洁的英文邮件。"),
                               ("直接问答", "回答问题，先给结论，再列要点。"),
+                              ("待办清单", "将口述整理为待办清单。"),
+                              ("日语翻译", "将口述翻译为日语。"),
+                              ("文案生成", "根据口述要求生成文案。"),
                               ("一个特别长的自定义模式名称用于检查布局", "生成简洁的工作清单。") ] {
             var mode = fixture.modes.draft(); mode.name = name; mode.sceneRules = rules
             try fixture.modes.save(mode, baseRules: fixture.modes.configuration.baseRules)
@@ -2305,6 +2312,207 @@ private final class FakeCloudSpeechProvider: CloudSpeechProvider {
     func disconnect() { disconnected = true }
     func preconnect() { preconnectCount += 1 }
     func cancelPreconnect() {}
+}
+
+private final class DeferredCloudSpeechProvider: CloudSpeechProvider {
+    let providerId = "deferred", displayName = "Deferred ASR"
+    var connectionState: CloudConnectionState = .connected
+    var onConnectionStateChanged: ((CloudConnectionState) -> Void)?
+    var isReady: Bool { true }
+    var completion: ((String?) -> Void)?
+    var completesOnDisconnect = false
+    func connect(apiKey: String?, model: String, onPartial: @escaping (String) -> Void,
+                 onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {}
+    func sendAudio(_ data: Data) {}
+    func finish(completion: @escaping (String?) -> Void) { self.completion = completion }
+    func disconnect() { if completesOnDisconnect { completion?(nil) } }
+    func preconnect() {}
+    func cancelPreconnect() {}
+}
+
+private final class FakeLocalSpeechTask: LocalSpeechAudioEnding, LocalSpeechTaskCancelling {
+    var ends = 0, cancels = 0
+    func endAudio() { ends += 1 }
+    func cancel() { cancels += 1 }
+}
+
+private final class OfflineQwenSpeechProvider: CloudSpeechProvider {
+    let qwen: ReliableQwenSpeechProvider
+    let text: String
+    let providerId = "offline-qwen", displayName = "Offline Qwen"
+    var connectionState: CloudConnectionState { qwen.connectionState }
+    var onConnectionStateChanged: ((CloudConnectionState) -> Void)? {
+        get { qwen.onConnectionStateChanged }
+        set { qwen.onConnectionStateChanged = newValue }
+    }
+    var isReady: Bool { true }
+    init(text: String, snapshot: SpeechSessionSnapshot) {
+        self.text = text
+        qwen = ReliableQwenSpeechProvider(snapshot: snapshot)
+    }
+    func connect(apiKey: String?, model: String, onPartial: @escaping (String) -> Void,
+                 onFinal: @escaping (String) -> Void, onError: @escaping (Error) -> Void) {
+        qwen.beginOfflineSession(text: text, onPartial: onPartial, onFinal: onFinal, onError: onError)
+    }
+    func sendAudio(_ data: Data) {}
+    func finish(completion: @escaping (String?) -> Void) { qwen.finish(completion: completion) }
+    func disconnect() { qwen.disconnect() }
+    func preconnect() {}
+    func cancelPreconnect() {}
+}
+
+extension AIProcessingRegression {
+    @MainActor
+    static func speechFinalizationTests() -> [(String, () throws -> Void)] {
+        [
+            ("Finish: disconnect settles once, rejects late provider results and permits a new session", {
+                for providerCompletes in [false, true] {
+                    let provider = DeferredCloudSpeechProvider()
+                    provider.completesOnDisconnect = providerCompletes
+                    let cloud = CloudSpeechService(snapshotProvider: { speechSample() }, factory: { _ in provider })
+                    cloud.connect(onPartial: { _ in }, onFinal: { _ in }, onError: { _ in })
+                    var completions = 0
+                    cloud.finish { text in if text == nil { completions += 1 } }
+                    let stale = provider.completion
+                    cloud.preconnect()
+                    cloud.disconnect(); cloud.disconnect(); stale?("late")
+                    try check(completions == 1, "Disconnect dropped or duplicated the pending completion")
+                    cloud.connect(onPartial: { _ in }, onFinal: { _ in }, onError: { _ in })
+                    var next: String?
+                    cloud.finish { next = $0 }; stale?("old recording"); provider.completion?("new recording")
+                    try check(next == "new recording" && completions == 1, "Old completion crossed recording sessions")
+                    cloud.disconnect()
+                }
+            }),
+            ("Finish: interrupted cloud capture preserves partial, flags recovery and bypasses AI", {
+                MockProtocol.reset([])
+                let provider = DeferredCloudSpeechProvider()
+                let cloud = CloudSpeechService(snapshotProvider: { speechSample() }, factory: { _ in provider })
+                cloud.connect(onPartial: { _ in }, onFinal: { _ in }, onError: { _ in })
+                let speech = SpeechService(offlineCloudService: cloud)
+                let network = Fixture()
+                var originals: [(String, Bool)] = [], output: [String] = []
+                let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "AI must not run") },
+                    modeNameProvider: { "测试" }, processor: network.service(), stopCapture: {}, cancelCapture: {},
+                    retainOriginal: { originals.append(($0, $1)) })
+                vm.onComplete = { text, _ in output.append(text) }
+                let emit = speech.beginOfflineCapture(cloud: true, onStopped: { vm.captureStopped() },
+                    onRawFinal: { vm.retainRecognizedOriginal($0, mayBeIncomplete: $1) }, onFinal: { vm.processAndInput($0) })
+                emit("已识别部分", false, nil); speech.stopRecording(); cloud.disconnect()
+                provider.completion?("late result")
+                try check(output == ["已识别部分"] && originals.count == 1 && originals[0].1, "Partial transcript lost or falsely complete")
+                try check(vm.fallbackNotice?.contains("遗漏") == true && MockProtocol.requests.isEmpty, "Incomplete text entered AI")
+            }),
+            ("Finish: explicit cloud cancellation never delivers pending or late text", {
+                let provider = DeferredCloudSpeechProvider(); provider.completesOnDisconnect = true
+                let cloud = CloudSpeechService(snapshotProvider: { speechSample() }, factory: { _ in provider })
+                cloud.connect(onPartial: { _ in }, onFinal: { _ in }, onError: { _ in })
+                let speech = SpeechService(offlineCloudService: cloud)
+                var callbacks = 0
+                let emit = speech.beginOfflineCapture(cloud: true, onRawFinal: { _, _ in callbacks += 1 }, onFinal: { _ in callbacks += 1 })
+                emit("取消的文字", false, nil); speech.stopRecording(); speech.cancelRecording()
+                provider.completion?("late"); emit("late local", true, nil)
+                try check(callbacks == 0, "Cancellation submitted text through disconnect completion")
+            }),
+            ("Finish: local stop ends audio and waits for the final tail exactly once", {
+                let speech = SpeechService(offlineCloudService: nil), task = FakeLocalSpeechTask()
+                var raw: [(String, Bool)] = [], output: [String] = [], stops = 0
+                let emit = speech.beginOfflineCapture(request: task, task: task, onStopped: { stops += 1 },
+                    onRawFinal: { raw.append(($0, $1)) }, onFinal: { output.append($0) })
+                emit("前半句", false, nil); speech.stopRecording(); speech.stopRecording()
+                try check(task.ends == 1 && task.cancels == 0 && output.isEmpty && stops == 1, "Local stop cancelled or submitted before finalization")
+                emit("前半句和句尾", false, nil)
+                try check(output.isEmpty, "A late partial was submitted as final")
+                emit("前半句和完整句尾", true, nil); emit("duplicate", true, nil); spin(0.15)
+                try check(output == ["前半句和完整句尾"] && raw.count == 1 && !raw[0].1, "Final tail was lost or completed twice")
+                try check(task.cancels == 1, "Completed task was not cleaned up")
+            }),
+            ("Finish: local timeout retains the newest partial, warns and skips AI", {
+                MockProtocol.reset([])
+                let speech = SpeechService(offlineCloudService: nil), task = FakeLocalSpeechTask(), network = Fixture()
+                var raw: [(String, Bool)] = [], output: [String] = []
+                let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "AI must not run") },
+                    modeNameProvider: { "测试" }, processor: network.service(), stopCapture: {}, cancelCapture: {},
+                    retainOriginal: { raw.append(($0, $1)) })
+                vm.onComplete = { text, _ in output.append(text) }
+                let emit = speech.beginOfflineCapture(request: task, task: task, onStopped: { vm.captureStopped() },
+                    onRawFinal: { vm.retainRecognizedOriginal($0, mayBeIncomplete: $1) }, onFinal: { vm.processAndInput($0) })
+                emit("先到达", false, nil); speech.stopRecording(); emit("停止后到达的部分", false, nil)
+                spin(0.4, until: { !output.isEmpty }); emit("too late", true, nil)
+                try check(output == ["停止后到达的部分"] && raw.count == 1 && raw[0].1, "Timeout lost partial or accepted late final")
+                try check(vm.fallbackNotice?.contains("遗漏") == true && MockProtocol.requests.isEmpty && task.cancels == 1, "Timeout did not fail safely")
+            }),
+            ("Finish: local error during drain settles immediately with partial text", {
+                let speech = SpeechService(offlineCloudService: nil), task = FakeLocalSpeechTask()
+                var raw: [(String, Bool)] = [], output: [String] = []
+                let emit = speech.beginOfflineCapture(request: task, task: task,
+                    onRawFinal: { raw.append(($0, $1)) }, onFinal: { output.append($0) })
+                emit("部分", false, nil); speech.stopRecording()
+                emit("更新的部分", false, TestFailure(description: "recognition ended with error"))
+                try check(output == ["更新的部分"] && raw.count == 1 && raw[0].1, "Recognition error hung or discarded returned text")
+                spin(0.15); try check(output.count == 1, "Error and timeout both delivered")
+            }),
+            ("Finish: cancel local drain rejects old results and timeout after a new capture", {
+                let speech = SpeechService(offlineCloudService: nil), oldTask = FakeLocalSpeechTask(), newTask = FakeLocalSpeechTask()
+                var raw: [String] = [], output: [String] = []
+                let old = speech.beginOfflineCapture(request: oldTask, task: oldTask,
+                    onRawFinal: { text, _ in raw.append(text) }, onFinal: { output.append($0) })
+                old("old partial", false, nil); speech.stopRecording(); speech.cancelRecording()
+                let current = speech.beginOfflineCapture(request: newTask, task: newTask,
+                    onRawFinal: { text, _ in raw.append(text) }, onFinal: { output.append($0) })
+                old("old final", true, nil); spin(0.15)
+                try check(output.isEmpty && speech.isCurrentlyRecording && oldTask.cancels == 1, "Cancelled callback affected next capture")
+                current("new final", true, nil)
+                try check(raw == ["new final"] && output == ["new final"] && newTask.ends == 0, "Spontaneous final was delayed or mixed with old text")
+            }),
+            ("Finish: stopping local startup completes without waiting for a task", {
+                let speech = SpeechService(offlineCloudService: nil), task = FakeLocalSpeechTask()
+                var flags: [Bool] = [], output: [String] = []
+                _ = speech.beginOfflineCapture(preparing: true, request: task, task: task,
+                    onRawFinal: { _, incomplete in flags.append(incomplete) }, onFinal: { output.append($0) })
+                speech.stopRecording()
+                try check(output == [""] && flags == [true] && task.ends == 0, "Startup stop waited for nonexistent final result")
+            }),
+            ("Finish: Qwen timeout reports failure before completion, keeps partial and cannot run AI", {
+                for partial in ["千问部分文字", ""] {
+                    MockProtocol.reset([])
+                    let sample = speechSample(), provider = OfflineQwenSpeechProvider(text: partial, snapshot: sample)
+                    let cloud = CloudSpeechService(snapshotProvider: { sample }, factory: { _ in provider })
+                    let speech = SpeechService(offlineCloudService: cloud), network = Fixture()
+                    var raw: [(String, Bool)] = [], output: [String] = [], events: [String] = [], notices: [String] = []
+                    let vm = RecordingViewModel(snapshotProvider: { throw TestFailure(description: "AI must not run") },
+                        modeNameProvider: { "测试" }, processor: network.service(), stopCapture: {}, cancelCapture: {},
+                        retainOriginal: { raw.append(($0, $1)) })
+                    vm.onComplete = { text, _ in output.append(text) }; vm.onRecognitionFailure = { notices.append($0) }
+                    let emit = speech.beginOfflineCapture(cloud: true, onStopped: { vm.captureStopped() },
+                        onRawFinal: { vm.retainRecognizedOriginal($0, mayBeIncomplete: $1) },
+                        onFinal: { events.append("finish"); vm.processAndInput($0) })
+                    cloud.connect(onPartial: { emit($0, false, nil) }, onFinal: { _ in events.append("unexpected final") },
+                        onError: { error in
+                            events.append("error"); vm.handleCloudRecognitionFailure(error.localizedDescription); cloud.disconnect()
+                        })
+                    spin(0.03); speech.stopRecording(); spin(0.5, until: { events.contains("finish") }); spin(0.15)
+                    try check(events == ["error", "finish"], "Timeout was successful, hung or completed twice: \(events)")
+                    try check(raw.count == 1 && raw[0].0 == partial && raw[0].1 && MockProtocol.requests.isEmpty, "Qwen partial missing or falsely complete")
+                    if partial.isEmpty {
+                        try check(output.isEmpty && notices.count == 1 && !vm.isProcessing, "Empty timeout was silently submitted")
+                    } else {
+                        try check(output == [partial] && vm.fallbackNotice?.contains("遗漏") == true, "Partial timeout had no warning")
+                    }
+                }
+            }),
+            ("Finish: successful Qwen final cancels timeout and stays complete", {
+                let sample = speechSample(), provider = OfflineQwenSpeechProvider(text: "partial", snapshot: sample)
+                let cloud = CloudSpeechService(snapshotProvider: { sample }, factory: { _ in provider })
+                var events: [String] = [], output: [String?] = []
+                cloud.connect(onPartial: { _ in }, onFinal: { events.append($0) }, onError: { _ in events.append("error") })
+                cloud.finish { output.append($0) }; provider.qwen.completeOfflineSession("complete final")
+                spin(0.3)
+                try check(events == ["complete final"] && output.count == 1 && output[0] == "complete final", "Successful final timed out or lost text")
+                cloud.disconnect()
+            })
+        ]
+    }
 }
 
 extension AIProcessingRegression {

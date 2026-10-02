@@ -200,6 +200,7 @@ enum CloudSpeechError: LocalizedError {
     case timeout
     case transportTimeout
     case sessionSetupTimeout
+    case finalizationTimeout
     case connectionFailed
     case recognitionStalled
     case apiError(String)
@@ -212,6 +213,7 @@ enum CloudSpeechError: LocalizedError {
         case .timeout: return "连接超时"
         case .transportTimeout: return "云端网络连接超时"
         case .sessionSetupTimeout: return "云端识别会话初始化超时"
+        case .finalizationTimeout: return "等待云端最终识别结果超时"
         case .connectionFailed: return "连接失败"
         case .recognitionStalled: return "云端识别无响应"
         case .apiError(let msg): return "API 错误: \(msg)"
@@ -313,9 +315,14 @@ final class CloudSpeechService: NSObject, @unchecked Sendable {
         }
     }
     func disconnect() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        let completion = pendingFinish
         generation = UUID(); pendingFinish = nil
         current?.disconnect(); current = nil; snapshot = nil; recording = false; connectionState = .idle
+        lock.unlock()
+        // Disconnect must settle a stopped recording even if the provider drops its callback.
+        // Explicit cancellation invalidates the capture session before reaching this callback.
+        completion?(nil)
     }
     func performHealthCheck() -> CloudHealthReport {
         lock.lock(); defer { lock.unlock() }

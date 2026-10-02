@@ -145,7 +145,7 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
     private let maxWarmRecoveryAttempts = 5
     private let transportConnectTimeout: TimeInterval = 8
     private let sessionSetupTimeout: TimeInterval = 5
-    private let finishTimeout: TimeInterval = 8
+    private var finishTimeout: TimeInterval = 8
     private let warmConnectionMaxAge: TimeInterval = 120
     private let firstTranscriptTimeout: TimeInterval = 3
     private let maxTranscriptRecoveryAttempts = 1
@@ -747,17 +747,13 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         DispatchQueue.main.async { callback?(text) }
     }
 
-    private func completeSuccessfully(_ text: String, recordAsSuccess: Bool = true) {
+    private func completeSuccessfully(_ text: String) {
         assertOnStateQueue()
         let finalText = text.isEmpty ? accumulatedText : text
         let finalCallback = self.finalCallback
         let completion = finishCompletion
         finishCompletion = nil
-        if recordAsSuccess {
-            ASRStabilityMetrics.shared.recordCloudSuccess()
-        } else {
-            ASRStabilityMetrics.shared.recordCloudFailure()
-        }
+        ASRStabilityMetrics.shared.recordCloudSuccess()
         Self.logger.info("session=\(shortSessionID) completed chars=\(finalText.count)")
         intentionallyClosing = true
         closeTransport(clearBusinessState: true, notifyDisconnected: false)
@@ -808,11 +804,8 @@ final class ReliableQwenSpeechProvider: NSObject, CloudSpeechProvider, @unchecke
         let expectedSessionID = sessionID
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.sessionID == expectedSessionID, self.finishRequested else { return }
-            Self.logger.warning("session=\(self.shortSessionID) final timeout, using latest partial")
-            self.completeSuccessfully(
-                self.accumulatedText,
-                recordAsSuccess: !self.accumulatedText.isEmpty
-            )
+            Self.logger.warning("session=\(self.shortSessionID) final timeout, preserving incomplete transcript")
+            self.failPermanently(CloudSpeechError.finalizationTimeout)
         }
         finishTimeoutItem = item
         stateQueue.asyncAfter(deadline: .now() + finishTimeout, execute: item)
@@ -1060,3 +1053,24 @@ extension ReliableQwenSpeechProvider: URLSessionWebSocketDelegate {
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
+
+#if SPOKEN_OFFLINE_TESTS
+extension ReliableQwenSpeechProvider {
+    // Seed only transport-independent state; finish and its timer use the production paths.
+    func beginOfflineSession(text: String, timeout: TimeInterval = 0.1,
+        onPartial: @escaping (String) -> Void, onFinal: @escaping (String) -> Void,
+        onError: @escaping (Error) -> Void) {
+        stateQueue.async {
+            self.finishTimeout = timeout
+            self.partialCallback = onPartial
+            self.finalCallback = onFinal
+            self.errorCallback = onError
+            self.publishPartial(text)
+        }
+    }
+
+    func completeOfflineSession(_ text: String) {
+        stateQueue.async { self.completeSuccessfully(text) }
+    }
+}
+#endif

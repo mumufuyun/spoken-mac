@@ -58,7 +58,7 @@ struct LegacyPromptBackup: Codable {
 
 final class ModeStore: ObservableObject {
     static let shared = ModeStore()
-    static let customLimit = 3
+    static let customLimit = 6
     @Published private(set) var configuration = ModeConfiguration()
     @Published private(set) var loadError: String?
     private let defaults: UserDefaults
