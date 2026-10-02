@@ -42,7 +42,8 @@ extension ModeDefinition {
 }
 
 struct ModeConfiguration: Codable, Equatable {
-    var version = 6
+    static let currentVersion = 7
+    var version = ModeConfiguration.currentVersion
     var baseRules = PromptComposer.defaultBaseRules
     var modes = WritingScene.allCases.map(ModeDefinition.preset)
     var selectedID = WritingScene.rawTranscript.storageID
@@ -83,12 +84,13 @@ final class ModeStore: ObservableObject {
     func reload() {
         do {
             if let saved = try file.read(ModeConfiguration.self) {
-                if saved.version == 2 || saved.version == 3 || saved.version == 4 || saved.version == 5 {
+                if (2..<ModeConfiguration.currentVersion).contains(saved.version) {
                     var migrated = saved
                     if migrated.version == 2 { migrated = Self.migratingV2(migrated) }
                     if migrated.version == 3 { migrated = Self.migratingV3(migrated) }
                     if migrated.version == 4 { migrated = Self.migratingV4(migrated) }
                     if migrated.version == 5 { migrated = Self.migratingV5(migrated) }
+                    if migrated.version == 6 { migrated = Self.migratingV6(migrated) }
                     try validate(migrated)
                     try file.save(migrated)
                     configuration = migrated
@@ -272,8 +274,24 @@ final class ModeStore: ObservableObject {
         return next
     }
 
+    /// v6→v7：只更新与冻结旧默认值完全相同的规则，保留手动编辑、名称和选择。
+    private static func migratingV6(_ saved: ModeConfiguration) -> ModeConfiguration {
+        var next = saved
+        next.version = 7
+        if next.baseRules == LegacyPromptsV6.baseRules {
+            next.baseRules = PromptComposer.defaultBaseRules
+        }
+        next.modes = next.modes.map { mode in
+            guard let scene = mode.builtin, mode.sceneRules == LegacyPromptsV6.sceneRules(for: scene) else { return mode }
+            var refreshed = mode
+            refreshed.sceneRules = PromptComposer.defaultSceneRules(for: scene)
+            return refreshed
+        }
+        return next
+    }
+
     private func validate(_ value: ModeConfiguration) throws {
-        guard value.version == 6 else { throw ConfigurationError.invalid("模式配置版本不受支持，请保留原文件") }
+        guard value.version == ModeConfiguration.currentVersion else { throw ConfigurationError.invalid("模式配置版本不受支持，请保留原文件") }
         guard !value.baseRules.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ConfigurationError.invalid("基础规则不能为空")
         }

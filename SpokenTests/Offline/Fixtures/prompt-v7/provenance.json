@@ -1,0 +1,15 @@
+{
+  "candidate": "candidate-13",
+  "configuration_version": 7,
+  "source_hashes": {
+    "Spoken/Services/PromptComposer.swift": "13a793ae30d3595b68a4599ed3d0cc79f8c6731957838b888a6ba9ce097b3318",
+    "Spoken/Services/AIProcessingService.swift": "71e017544e7a344cad19bf4e5cf066f1e952458e4ef496b1b4284ab19152ea0d"
+  },
+  "strict_passes": 184,
+  "total": 194,
+  "review": "Fixed tuned set; nonblind AI review; not independent acceptance or whole-app validation",
+  "snapshot_hashes": {
+    "baseline-prompts.json": "b34d4b83a25fbd412449d69540baf9ae025799c42d848011f464340abed68e91",
+    "candidate-13-prompts.json": "1654cb895cd03dad9628d0f6e62ad7d8208fa1909597fa94efbd811b4154f9cf"
+  }
+}
