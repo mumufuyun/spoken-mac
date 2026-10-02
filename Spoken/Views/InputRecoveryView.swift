@@ -75,7 +75,7 @@ struct InputRecoveryView: View {
                     ProgressView().controlSize(.small)
                     Button("取消整理", action: recovery.cancelProcessing)
                 } else {
-                    Button("重新整理", action: recovery.reprocess).buttonStyle(.borderedProminent)
+                    Button("整理并输入", action: recovery.reprocess).buttonStyle(.borderedProminent)
                         .disabled(!recovery.canReprocess)
                 }
             }.controlSize(.small)
@@ -91,10 +91,10 @@ struct InputRecoveryView: View {
         if recovery.inputIsBusy { return "录音或正常输入进行中，完成后可重新整理。" }
         if let resultMode = recovery.resultMode {
             if resultMode.id != recovery.selectedModeID {
-                return "已有结果为「\(resultMode.name)」，重新整理后应用新场景。"
+                return "已有结果为「\(resultMode.name)」，点击“整理并输入”应用新场景。"
             }
             return "当前结果：\(resultMode.name)"
         }
-        return "场景仅用于这份原文，点击“重新整理”生效。"
+        return "按所选场景整理，完成后自动填入原输入框。"
     }
 }

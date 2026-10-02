@@ -8,7 +8,7 @@ protocol RecoveryTextProcessing: AnyObject {
 
 extension AIProcessingService: RecoveryTextProcessing {}
 
-/// Retains one ASR original in memory. It never persists audio/text or injects recovered output.
+/// Retains one ASR original in memory; the presentation owner delivers validated results.
 @MainActor
 final class InputRecoveryStore: ObservableObject {
     static let shared = InputRecoveryStore(modes: .shared, activity: .shared)
@@ -31,6 +31,7 @@ final class InputRecoveryStore: ObservableObject {
     @Published private(set) var notice: String?
     @Published private(set) var copyNotice: String?
     @Published var display: Display = .original
+    var onProcessed: ((String) -> Void)?
 
     let modes: ModeStore
     private let processor: RecoveryTextProcessing
@@ -114,6 +115,8 @@ final class InputRecoveryStore: ObservableObject {
         resultMode = nil
         display = .original
         let id = UUID()
+        // Freeze the delivery destination with this request, just like its scene settings.
+        let deliverResult = onProcessed
         requestID = id
         processingModeName = snapshot.mode.name
         isProcessing = true
@@ -134,6 +137,7 @@ final class InputRecoveryStore: ObservableObject {
                     self.result = text
                     self.resultMode = snapshot.mode
                     self.display = .result
+                    deliverResult?(text)
                 case .failure: self.notice = "重新整理失败，仍可复制原文。"
                 }
                 self.releaseActivity()

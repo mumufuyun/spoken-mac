@@ -10,10 +10,10 @@ class KeyboardService {
 
     private init() {}
 
-    func typeText(_ text: String) -> InjectionOutcome {
+    func typeText(_ text: String, targetIsReady: () -> Bool = { true }) -> InjectionOutcome {
         print("Spoken: [DEBUG] KeyboardService.typeText: length=\(text.count)")
         
-        let outcome = engine.inject(text)
+        let outcome = engine.inject(text, targetIsReady: targetIsReady)
         
         if let restoreID = engine.pendingRestoreID {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in

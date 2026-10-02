@@ -87,10 +87,10 @@ final class TextInjectionEngine {
         let changeCount: Int
     }
 
-    func inject(_ text: String) -> InjectionOutcome {
+    func inject(_ text: String, targetIsReady: () -> Bool = { true }) -> InjectionOutcome {
         guard !text.isEmpty else { return .inserted }
 
-        return injectViaClipboard(text)
+        return injectViaClipboard(text, targetIsReady: targetIsReady)
     }
 
     func finishClipboardRestore(expectedID: UUID? = nil) {
@@ -100,7 +100,7 @@ final class TextInjectionEngine {
         pending.snapshot.restore(to: pasteboard, expectedChangeCount: pending.changeCount)
     }
 
-    private func injectViaClipboard(_ text: String) -> InjectionOutcome {
+    private func injectViaClipboard(_ text: String, targetIsReady: () -> Bool) -> InjectionOutcome {
         pendingClipboardRestore = nil
         let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture(from: pasteboard) : nil
         let pb = pasteboard
@@ -119,6 +119,9 @@ final class TextInjectionEngine {
         guard canPaste() else { return .permissionRequired }
         prepareTarget()
         guard canPaste() else { return .permissionRequired }
+        // Recovery must still address its captured input, even after target preparation.
+        // A missing/stale destination leaves the result on the clipboard for manual paste.
+        guard targetIsReady() else { return .copiedToClipboard }
         let pasteSucceeded = postPaste()
 
         usleep(150_000)
@@ -173,5 +176,66 @@ final class TextInjectionEngine {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
         return true
+    }
+}
+
+/// Captures only focus identity, never the input's contents. Used by explicit recovery delivery.
+@MainActor
+final class RecoveryInputTarget {
+    private let application: NSRunningApplication
+    private let appElement: AXUIElement
+    private let input: AXUIElement
+    private let window: AXUIElement?
+
+    private init(application: NSRunningApplication, appElement: AXUIElement, input: AXUIElement, window: AXUIElement?) {
+        self.application = application; self.appElement = appElement
+        self.input = input; self.window = window
+    }
+
+    static func capture(application: NSRunningApplication?) -> RecoveryInputTarget? {
+        guard AXIsProcessTrusted(), let application, !application.isTerminated,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let app = AXUIElementCreateApplication(application.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.2)
+        guard let input = element(app, attribute: kAXFocusedUIElementAttribute) else { return nil }
+        AXUIElementSetMessagingTimeout(input, 0.2)
+        guard isTextInput(input) else { return nil }
+        let window = element(app, attribute: kAXFocusedWindowAttribute)
+        if let window { AXUIElementSetMessagingTimeout(window, 0.2) }
+        return RecoveryInputTarget(application: application, appElement: app, input: input, window: window)
+    }
+
+    func restoreFocus() -> Bool {
+        guard AXIsProcessTrusted(), !application.isTerminated,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier,
+              Self.isTextInput(input) else { return false }
+        if let focused = Self.element(appElement, attribute: kAXFocusedUIElementAttribute), CFEqual(focused, input) {
+            return NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier
+        }
+        if let window {
+            AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        }
+        AXUIElementSetAttributeValue(input, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier,
+              let focused = Self.element(appElement, attribute: kAXFocusedUIElementAttribute) else { return false }
+        return CFEqual(focused, input)
+            && NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier
+    }
+
+    private static func element(_ owner: AXUIElement, attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(owner, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeDowncast(value, to: AXUIElement.self)
+    }
+
+    private static func isTextInput(_ input: AXUIElement) -> Bool {
+        var role: CFTypeRef?, subrole: CFTypeRef?, enabled: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(input, kAXRoleAttribute as CFString, &role) == .success,
+              let role = role as? String, [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role) else { return false }
+        AXUIElementCopyAttributeValue(input, kAXSubroleAttribute as CFString, &subrole)
+        AXUIElementCopyAttributeValue(input, kAXEnabledAttribute as CFString, &enabled)
+        return subrole as? String != kAXSecureTextFieldSubrole && enabled as? Bool != false
     }
 }

@@ -1461,6 +1461,7 @@ private struct InteractiveSmokeView: View {
     @State private var failSpeechKeyRead = false
     @State private var recoveryPanel: InputRecoveryPanel?
     @State private var recoveryStore: InputRecoveryStore?
+    @State private var failRecoveryTarget = false
 
     private var speechDependencies: SpeechSettingsDependencies {
         fixture.keys.failRead = failSpeechKeyRead
@@ -1486,6 +1487,7 @@ private struct InteractiveSmokeView: View {
                 Button("已授权") { fixture.permissionState = .ready; fixture.accessibility.refresh() }
                 Button("授权未生效") { fixture.permissionState = .eventPostingDenied; fixture.accessibility.refresh() }
                 Button("设置打开失败") { fixture.settingsOpenSucceeds = false; fixture.accessibility.openSettings() }
+                Toggle("模拟找回目标失效", isOn: $failRecoveryTarget).toggleStyle(.checkbox)
             }.padding(8)
             Divider()
             if showingRecording, let recordingModel {
@@ -1529,8 +1531,23 @@ private struct InteractiveSmokeView: View {
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hidesOnDeactivate = false
         panel.level = .floating; panel.isReleasedWhenClosed = false
         panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak panel] in
-            recovery.cancelProcessing(); panel?.orderOut(nil); panel?.contentView = nil; recoveryPanel = nil
+            recovery.cancelProcessing(); recovery.onProcessed = nil
+            panel?.orderOut(nil); panel?.contentView = nil; recoveryPanel = nil
         })
+        recovery.onProcessed = { [weak panel] text in
+            guard let panel, recoveryPanel === panel, panel.isVisible else { return }
+            recovery.onProcessed = nil
+            panel.orderOut(nil); panel.contentView = nil; recoveryPanel = nil
+            // Exercise production clipboard/focus gating on a private pasteboard, without OS events.
+            let pb = NSPasteboard(name: .init("spoken-recovery-smoke-" + UUID().uuidString))
+            defer { pb.releaseGlobally() }
+            let engine = TextInjectionEngine(pasteboard: pb, canPaste: { true }, postPaste: {
+                output = "自动输入检查：" + text; return true
+            })
+            if engine.inject(text, targetIsReady: { !failRecoveryTarget }) != .inserted {
+                output = "目标失效，保留结果并提示手动粘贴：" + (pb.string(forType: .string) ?? "")
+            }
+        }
         panel.center(); recoveryPanel = panel; panel.makeKeyAndOrderFront(nil)
     }
 
@@ -2055,6 +2072,20 @@ private extension AIProcessingRegression {
                 try check(engine.inject("synthetic result") == .permissionRequired && posts == 0, "Revocation bypassed final check")
                 try check(pb.string(forType: .string) == "synthetic result", "Result missing")
             }),
+            ("Injection: recovery validates the target after preparation and retains fallback text", {
+                let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
+                var targetReady = true, invalidateDuringPrepare = true, posts = 0
+                let engine = TextInjectionEngine(pasteboard: pb, canPaste: { true }, postPaste: { posts += 1; return true },
+                    prepareTarget: { if invalidateDuringPrepare { targetReady = false } })
+                try check(engine.inject("recovered result", targetIsReady: { targetReady }) == .copiedToClipboard,
+                          "Changed or missing target was reported as inserted")
+                engine.finishClipboardRestore()
+                try check(posts == 0 && pb.string(forType: .string) == "recovered result" && engine.pendingRestoreID == nil,
+                          "Stale target received paste or lost manual fallback")
+                invalidateDuringPrepare = false; targetReady = true
+                try check(engine.inject("next recovered result", targetIsReady: { targetReady }) == .inserted && posts == 1,
+                          "Confirmed target did not receive exactly one paste")
+            }),
             ("Injection: failed event creation keeps clipboard and does not report sent", {
                 let pb = NSPasteboard.withUniqueName(); defer { pb.releaseGlobally() }
                 let engine = TextInjectionEngine(pasteboard: pb, canPaste: { true }, postPaste: { false })
@@ -2550,6 +2581,7 @@ private final class RecoveryFixture {
     let config = ConfigurationFixture()
     let processor = RecoveryProcessorStub()
     var copied: [String] = []
+    var delivered: [String] = []
     var copySucceeds = true
     var allowsStart = true
     var recovery: InputRecoveryStore!
@@ -2563,6 +2595,7 @@ private final class RecoveryFixture {
                 self?.copied.append(text)
                 return self?.copySucceeds == true
             })
+        recovery.onProcessed = { [weak self] in self?.delivered.append($0) }
     }
 }
 
@@ -2578,6 +2611,7 @@ private extension AIProcessingRegression {
                 store.capture(" \n\t")
                 store.copyDisplayedText()
                 try check(store.entry?.id == id && store.entry?.original == original && f.copied == [original], "Original altered or replaced by empty input")
+                try check(f.delivered.isEmpty && f.processor.requests.isEmpty, "Copy unexpectedly processed or injected original")
                 try check(store.entry?.mayBeIncomplete == true, "Partial recognition lost its warning")
                 store.capture("下一次原文")
                 try check(store.entry?.id != id && store.selectedModeID == nil && store.result == nil && store.entry?.mayBeIncomplete == false, "New transcript did not reset recovery")
@@ -2611,12 +2645,47 @@ private extension AIProcessingRegression {
                 let f = try RecoveryFixture(), store = f.recovery!
                 store.capture("旧原文"); store.reprocess(); store.cancelProcessing()
                 f.processor.requests[0].finish(.success("迟到结果")); spin(0.1)
-                try check(store.result == nil && store.notice?.contains("取消") == true, "Canceled request completed")
+                try check(store.result == nil && store.notice?.contains("取消") == true && f.delivered.isEmpty, "Canceled request completed or injected")
                 store.reprocess(); store.capture("新原文"); store.reprocess()
                 f.processor.requests[1].finish(.success("过期旧结果")); spin(0.1)
                 try check(store.isProcessing && store.result == nil && store.entry?.original == "新原文", "Replaced request overwrote new entry")
                 f.processor.requests[2].finish(.success("新结果")); spin(0.1, until: { !store.isProcessing })
-                try check(store.result == "新结果" && f.processor.cancellations == 2, "Current request failed or cancellation missing")
+                try check(store.result == "新结果" && f.processor.cancellations == 2 && f.delivered == ["新结果"], "Current request failed or stale request injected")
+            }),
+            ("Recovery: explicit processing delivers validated output once to its captured destination", {
+                let f = try RecoveryFixture(), store = f.recovery!
+                var first: [String] = [], second: [String] = []
+                store.onProcessed = { first.append($0) }
+                store.capture("保留的原文"); store.reprocess()
+                store.onProcessed = { second.append($0) }
+                let request = f.processor.requests[0]
+                request.finish(.success("整理后的结果")); spin(0.1, until: { !store.isProcessing })
+                request.finish(.success("重复回调")); spin(0.1)
+                try check(first == ["整理后的结果"] && second.isEmpty, "Delivery duplicated or destination changed in flight")
+                store.prepareForPresentation(); store.display = .original; store.copyDisplayedText()
+                store.selectMode(WritingScene.meetingNotes.storageID)
+                try check(first.count == 1 && second.isEmpty && f.copied.last == "保留的原文" && store.result == "整理后的结果",
+                          "Reopen, copy or scene selection injected again or lost retained content")
+            }),
+            ("Recovery: delivery keeps activity busy through the handoff to injection", {
+                let activity = StateManager.shared
+                activity.transition(to: .idle); defer { activity.transition(to: .idle) }
+                let f = try RecoveryFixture(activity: activity), store = f.recovery!
+                var installed = false, deliveredWhileRecovering = false
+                let updates = AppUpdateService(isBusy: { activity.isBusy() })
+                store.onProcessed = { _ in
+                    deliveredWhileRecovering = activity.currentState == .recovering
+                    store.cancelProcessing(); store.onProcessed = nil
+                    activity.transition(to: .injecting)
+                }
+                store.capture("原文"); store.reprocess()
+                try check(updates.postponeInstallationIfBusy { installed = true }, "Update did not wait for recovery")
+                f.processor.requests[0].finish(.success("可输入的结果")); spin(0.1, until: { !store.isProcessing })
+                updates.activityDidChange()
+                try check(deliveredWhileRecovering && activity.currentState == .injecting && !installed,
+                          "Recovery released activity during delivery or overwrote injection state")
+                activity.transition(to: .idle); updates.activityDidChange()
+                try check(installed, "Completed injection did not release installation")
             }),
             ("Recovery: failures and unsafe output retain copyable original", {
                 let f = try RecoveryFixture(), store = f.recovery!
@@ -2625,7 +2694,7 @@ private extension AIProcessingRegression {
                     store.reprocess(); f.processor.requests.last!.finish(outcome)
                     spin(0.1, until: { !store.isProcessing })
                     store.copyDisplayedText()
-                    try check(store.result == nil && store.notice != nil && f.copied.last == "可找回的原文", "Failure changed raw or exposed unsafe output")
+                    try check(store.result == nil && store.notice != nil && f.copied.last == "可找回的原文" && f.delivered.isEmpty, "Failure changed raw, injected or exposed unsafe output")
                 }
                 store.reprocess(); f.processor.requests.last!.finish(.success("可复制的结果"))
                 spin(0.1, until: { !store.isProcessing }); store.copyDisplayedText()
@@ -2661,7 +2730,7 @@ private extension AIProcessingRegression {
                 updates.activityDidChange()
                 try check(!installed, "Update installed during new recording")
                 f.processor.requests[0].finish(.success("迟到结果")); spin(0.1)
-                try check(store.result == nil, "Normal recording accepted late recovery result")
+                try check(store.result == nil && f.delivered.isEmpty, "Normal recording accepted or injected late recovery result")
                 activity.transition(to: .idle); updates.activityDidChange()
                 try check(installed && store.canReprocess, "Completion did not release activity lock")
                 f.allowsStart = false; store.reprocess()

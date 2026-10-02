@@ -55,6 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var accessibility: AccessibilityPermissionService { .shared }
     private var recordingViewModel = RecordingViewModel()
     private var frontmostAppBeforeHotKey: NSRunningApplication?
+    private var inputTargetBeforeHotKey: RecoveryInputTarget?
     private let stateManager = StateManager.shared
     private let networkMonitor = NWPathMonitor()
     private let networkMonitorQueue = DispatchQueue(label: "com.moss.spoken.network-monitor")
@@ -300,7 +301,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func handleHotKey() {
-        guard !AppUpdateService.shared.isInstalling else { return }
+        guard !AppUpdateService.shared.isInstalling, stateManager.currentState != .injecting else { return }
         if recoveryPanel != nil {
             closeRecoveryPanel()
             popover.performClose(nil)
@@ -338,6 +339,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         stateManager.transition(to: .starting)
 
         let recovery = InputRecoveryStore.shared
+        inputTargetBeforeHotKey = recovery.entry == nil ? nil : RecoveryInputTarget.capture(application: frontmostAppBeforeHotKey)
         let viewModel = RecordingViewModel(retainOriginal: { text, incomplete in
             recovery.capture(text, mayBeIncomplete: incomplete)
         })
@@ -421,6 +423,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard recordingViewModel.canRecoverInput, recovery.entry != nil,
               !SpeechService.shared.hasSpeechInCurrentSession, !AppUpdateService.shared.isInstalling else { return }
         let origin = recordingPanel?.frame.origin
+        let targetApp = recordingViewModel.targetApplication ?? frontmostAppBeforeHotKey
+        let inputTarget = inputTargetBeforeHotKey
         // Cancel capture before showing recovery. This invalidates late ASR callbacks and
         // deliberately keeps the retained original when the new recording was still empty.
         recordingViewModel.cancel()
@@ -438,6 +442,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak self] in self?.closeRecoveryPanel() })
         if origin == nil { panel.center() }
         recoveryPanel = panel
+        recovery.onProcessed = { [weak self, weak panel] text in
+            guard let self, let panel, self.recoveryPanel === panel, panel.isVisible else { return }
+            self.closeRecoveryPanel()
+            self.performTextInjection(text: text, targetApp: targetApp,
+                                      targetIsReady: { inputTarget?.restoreFocus() == true })
+        }
         hotKeyService.setBusy(true)
         hotKeyService.startEscapeMonitoring()
         panel.makeKeyAndOrderFront(nil)
@@ -445,6 +455,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func closeRecoveryPanel() {
         InputRecoveryStore.shared.cancelProcessing()
+        InputRecoveryStore.shared.onProcessed = nil
         recoveryPanel?.orderOut(nil)
         recoveryPanel?.contentView = nil
         recoveryPanel = nil
@@ -454,7 +465,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Text Injection
 
-    private func performTextInjection(text: String, targetApp: NSRunningApplication?) {
+    private func performTextInjection(text: String, targetApp: NSRunningApplication?,
+                                      targetIsReady: @escaping () -> Bool = { true }) {
         print("Spoken: [DEBUG] performTextInjection - text length: \(text.count)")
         stateManager.transition(to: .injecting)
         PipelineLatencyMetrics.shared.mark(.injectionStarted)
@@ -471,6 +483,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         waitForTargetAndInject(
             text: text,
             targetApp: targetApp,
+            targetIsReady: targetIsReady,
             deadline: ProcessInfo.processInfo.systemUptime + 0.8
         )
     }
@@ -478,27 +491,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func waitForTargetAndInject(
         text: String,
         targetApp: NSRunningApplication?,
+        targetIsReady: @escaping () -> Bool,
         deadline: TimeInterval
     ) {
-        let targetIsReady = targetApp.map {
+        let targetAppIsReady = targetApp.map {
             !$0.isTerminated
                 && NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.processIdentifier
         } ?? true
-        if targetIsReady || ProcessInfo.processInfo.systemUptime >= deadline {
-            executeInjection(text: text, targetApp: targetApp)
+        if targetAppIsReady || ProcessInfo.processInfo.systemUptime >= deadline {
+            executeInjection(text: text, targetApp: targetApp, targetIsReady: targetIsReady)
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.waitForTargetAndInject(text: text, targetApp: targetApp, deadline: deadline)
+            self?.waitForTargetAndInject(text: text, targetApp: targetApp, targetIsReady: targetIsReady, deadline: deadline)
         }
     }
 
-    private func executeInjection(text: String, targetApp: NSRunningApplication?) {
+    private func executeInjection(text: String, targetApp: NSRunningApplication?, targetIsReady: () -> Bool) {
         let outcome: InjectionOutcome
         let permissionGranted = accessibility.refresh()
         if let targetApp, !targetApp.isTerminated,
            NSWorkspace.shared.frontmostApplication?.processIdentifier == targetApp.processIdentifier {
-            outcome = KeyboardService.shared.typeText(text)
+            outcome = KeyboardService.shared.typeText(text, targetIsReady: targetIsReady)
         } else {
             let pb = NSPasteboard.general
             pb.clearContents()
