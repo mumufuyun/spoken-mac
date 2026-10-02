@@ -45,6 +45,9 @@
 		626003FF5F78762B2585075F /* SpeechWireProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A3F6A6ABC475B259578D424 /* SpeechWireProtocol.swift */; };
 		B0F469AA44E853E27BA652EA /* StreamingSpeechProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293FEEFF185E308DC61A90CF /* StreamingSpeechProvider.swift */; };
 		E7EE872F5F7D8C76C0B985D4 /* HTTPTranscriptionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8316E7105DF006DD9C2E5D87 /* HTTPTranscriptionProvider.swift */; };
+		A24000000000000000000002 /* AppUpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24000000000000000000001 /* AppUpdateService.swift */; };
+		A24000000000000000000004 /* UpdateSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24000000000000000000003 /* UpdateSettingsView.swift */; };
+		A24000000000000000000005 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A24000000000000000000006 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +104,8 @@
 		1A3F6A6ABC475B259578D424 /* SpeechWireProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechWireProtocol.swift; sourceTree = "<group>"; };
 		293FEEFF185E308DC61A90CF /* StreamingSpeechProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingSpeechProvider.swift; sourceTree = "<group>"; };
 		8316E7105DF006DD9C2E5D87 /* HTTPTranscriptionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPTranscriptionProvider.swift; sourceTree = "<group>"; };
+		A24000000000000000000001 /* AppUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateService.swift; sourceTree = "<group>"; };
+		A24000000000000000000003 /* UpdateSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateSettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -112,12 +117,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A24000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (A24000000000000000000005 /* Sparkle in Frameworks */,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		1B8A6F544698795D23DDDFE2 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				A24000000000000000000001 /* AppUpdateService.swift */,
 				8316E7105DF006DD9C2E5D87 /* HTTPTranscriptionProvider.swift */,
 				293FEEFF185E308DC61A90CF /* StreamingSpeechProvider.swift */,
 				1A3F6A6ABC475B259578D424 /* SpeechWireProtocol.swift */,
@@ -174,6 +186,7 @@
 		B0C0D1C4B0F3D73A76AAE6CA /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				A24000000000000000000003 /* UpdateSettingsView.swift */,
 				2F809342A2D14CE9F2ED777F /* ModelSettingsView.swift */,
 				1C2EF13BFC455138431CEC3B /* ModeSettingsView.swift */,
 				9044B48AA4957FC4FF5B1B4F /* SpeechSettingsView.swift */,
@@ -244,6 +257,7 @@
 			buildConfigurationList = 02A403ADA7CD8639DBC22E96 /* Build configuration list for PBXNativeTarget "Spoken" */;
 			buildPhases = (
 				1284D92D0C654FD06ECE47B8 /* Sources */,
+				A24000000000000000000007 /* Frameworks */,
 				AC40C90ED8AA0992841FF83C /* Resources */,
 			);
 			buildRules = (
@@ -252,6 +266,7 @@
 			);
 			name = Spoken;
 			packageProductDependencies = (
+				A24000000000000000000006 /* Sparkle */,
 			);
 			productName = Spoken;
 			productReference = 2FA57F0A31DC35BC7A615EA5 /* Spoken.app */;
@@ -303,6 +318,7 @@
 			mainGroup = 9462C8E31A4CDA14B1302CE8;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			packageReferences = (A24000000000000000000008 /* XCRemoteSwiftPackageReference "Sparkle" */,);
 			productRefGroup = 8925AE968B99902E31F11BA0 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -329,6 +345,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A24000000000000000000004 /* UpdateSettingsView.swift in Sources */,
+				A24000000000000000000002 /* AppUpdateService.swift in Sources */,
 				E7EE872F5F7D8C76C0B985D4 /* HTTPTranscriptionProvider.swift in Sources */,
 				B0F469AA44E853E27BA652EA /* StreamingSpeechProvider.swift in Sources */,
 				626003FF5F78762B2585075F /* SpeechWireProtocol.swift in Sources */,
@@ -421,7 +439,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 231;
+				CURRENT_PROJECT_VERSION = 240.1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -442,7 +460,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.3.1;
+				MARKETING_VERSION = 2.4.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -505,7 +523,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 231;
+				CURRENT_PROJECT_VERSION = 240.1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -520,7 +538,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.3.1;
+				MARKETING_VERSION = 2.4.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = Spoken;
@@ -577,6 +595,21 @@
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A24000000000000000000008 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = { kind = exactVersion; version = 2.10.0; };
+		};
+/* End XCRemoteSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+		A24000000000000000000006 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A24000000000000000000008 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCConfigurationList section */
 		02A403ADA7CD8639DBC22E96 /* Build configuration list for PBXNativeTarget "Spoken" */ = {

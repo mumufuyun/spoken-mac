@@ -245,6 +245,34 @@ private struct AIProcessingRegression {
             return
         }
         let tests: [(String, () throws -> Void)] = [
+            ("Updater: installation waits for active speech and resumes once", {
+                var busy = true
+                var installs = 0
+                let updates = AppUpdateService(isBusy: { busy })
+                try check(updates.postponeInstallationIfBusy { installs += 1 }, "Active speech did not defer installation")
+                updates.activityDidChange()
+                try check(installs == 0 && updates.isWaitingForIdle && !updates.isInstalling, "Installed while speech is active")
+                busy = false
+                updates.activityDidChange()
+                updates.activityDidChange()
+                try check(installs == 1 && !updates.isWaitingForIdle && updates.isInstalling, "Install was not resumed exactly once")
+            }),
+            ("Updater: idle installation locks out new recordings", {
+                let updates = AppUpdateService()
+                var calls = 0
+                try check(!updates.postponeInstallationIfBusy { calls += 1 }, "Idle installation was postponed")
+                try check(updates.isInstalling && calls == 0, "Sparkle must own immediate installation")
+            }),
+            ("Updater: canceled update cannot later resume installation", {
+                var busy = true
+                var installs = 0
+                let updates = AppUpdateService(isBusy: { busy })
+                _ = updates.postponeInstallationIfBusy { installs += 1 }
+                updates.finishUpdateSession()
+                busy = false
+                updates.activityDidChange()
+                try check(installs == 0 && !updates.isInstalling && !updates.isWaitingForIdle, "Canceled install resumed")
+            }),
             ("Qwen ignores legacy thinking=true and sends false", {
                 MockProtocol.reset([.init(json: answer("整理后的正文"))])
                 let f = Fixture()

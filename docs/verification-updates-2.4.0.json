@@ -1,0 +1,78 @@
+{
+  "version": "2.4.0",
+  "build": "240.1",
+  "installer_sha256": "47309a84450ade21ab6e3629a82ac5f1bf9882733eecf47ba117528e9ebcf5e4",
+  "offline_tests": "161/161",
+  "update_integration_tests": {
+    "valid": {
+      "passed": true,
+      "events": [
+        "CHECK",
+        "FOUND 2",
+        "DOWNLOAD",
+        "EXTRACT",
+        "READY",
+        "POSTPONE",
+        "RESUME",
+        "RELAUNCHED 2"
+      ],
+      "installed_version": "2"
+    },
+    "tampered-archive": {
+      "passed": true,
+      "events": [
+        "CHECK",
+        "FOUND 2",
+        "DOWNLOAD",
+        "EXTRACT",
+        "ERROR 4005 The update is improperly signed and could not be validated. Please try again later or contact the app developer."
+      ],
+      "installed_version": "1"
+    },
+    "tampered-feed": {
+      "passed": true,
+      "events": [
+        "CHECK",
+        "ERROR 1000 The update feed is improperly signed and could not be validated. Please try again later or contact the app developer."
+      ],
+      "installed_version": "1"
+    },
+    "up-to-date": {
+      "passed": true,
+      "events": [
+        "CHECK",
+        "NO_UPDATE"
+      ],
+      "installed_version": "1"
+    },
+    "offline": {
+      "passed": true,
+      "events": [
+        "CHECK",
+        "ERROR 2001 An error occurred in retrieving update information. Please try again later."
+      ],
+      "installed_version": "1"
+    },
+    "checks-disabled": {
+      "passed": true,
+      "events": [
+        "AUTO_DISABLED"
+      ],
+      "installed_version": "1"
+    },
+    "automatic-check": {
+      "passed": true,
+      "events": [
+        "AUTO_CHECKED"
+      ],
+      "installed_version": "1"
+    }
+  },
+  "native_ui": "light/dark/minimum-size rendered and inspected",
+  "local_app_build": "passed; Command Line Tools; ad-hoc app signature",
+  "dmg_integrity": "passed",
+  "production_feed_signed": false,
+  "website_deployed": false,
+  "blocker": "Mac locked; generate_appcast blocked in SecItemCopyMatching waiting for login Keychain authorization. Signing process stopped; retry after unlock.",
+  "xcode_archive": "not run; full Xcode and Developer ID unavailable"
+}

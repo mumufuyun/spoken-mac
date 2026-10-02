@@ -47,6 +47,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var hotKeyNoticePanel: NSPanel?
     private var hotKeyStateSubscription: AnyCancellable?
     private var accessibilitySubscription: AnyCancellable?
+    private var updateSubscriptions = Set<AnyCancellable>()
     private var accessibilityGuidePanel: NSPanel?
     private var deliveryNoticePanel: NSPanel?
     private var accessibility: AccessibilityPermissionService { .shared }
@@ -62,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupPopover()
         setupHotKey()
         setupAccessibilityMonitoring()
+        setupUpdates()
         registerSleepWakeObservers()
         startNetworkMonitoring()
         checkPermissions()
@@ -91,6 +93,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: - Status Item
+
+    private func setupUpdates() {
+        let updates = AppUpdateService.shared
+        updates.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.updateStatusItem()
+        }.store(in: &updateSubscriptions)
+        stateManager.$currentState.receive(on: DispatchQueue.main).sink { _ in
+            updates.activityDidChange()
+        }.store(in: &updateSubscriptions)
+        NotificationCenter.default.publisher(for: .spokenWillCheckForUpdates).sink { [weak self] _ in
+            self?.popover.performClose(nil)
+        }.store(in: &updateSubscriptions)
+        updates.start()
+    }
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -280,6 +296,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func handleHotKey() {
+        guard !AppUpdateService.shared.isInstalling else { return }
         if popover.isShown {
             popover.performClose(nil)
             return
@@ -541,10 +558,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func updateStatusItem() {
         let warning = hotKeyService.warning != nil || accessibility.needsAttention
-        statusItem.button?.title = warning ? " ⚠" : ""
-        let status = "Spoken · \(hotKeyService.displayName) · \(hotKeyService.statusText) · \(accessibility.state.statusText)"
+        let update = AppUpdateService.shared.availableVersion.map { " · 新版本 \($0) 可更新" } ?? ""
+        statusItem.button?.title = (warning ? " ⚠" : "") + (update.isEmpty ? "" : " ↑")
+        let status = "Spoken · \(hotKeyService.displayName) · \(hotKeyService.statusText) · \(accessibility.state.statusText)" + update
         statusItem.button?.toolTip = status
-        statusItem.button?.setAccessibilityLabel("Spoken，" + hotKeyService.accessibilityName + "，" + hotKeyService.statusText + "，" + accessibility.state.statusText)
+        statusItem.button?.setAccessibilityLabel("Spoken，" + hotKeyService.accessibilityName + "，" + hotKeyService.statusText + "，" + accessibility.state.statusText + update)
     }
 
     private func checkPermissions() {

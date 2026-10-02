@@ -7,6 +7,7 @@ cd "$SPOKEN_ROOT"
 SPOKEN_BUILD="$SPOKEN_ROOT/build/local"
 SPOKEN_APP="$SPOKEN_ROOT/build/Spoken.app"
 SPOKEN_TARGET="$(uname -m)-apple-macosx14.0"
+SPOKEN_SPARKLE="$(bash scripts/prepare_sparkle.sh)"
 # 清空旧产物，避免遗留的 ._* AppleDouble 文件被签入包内
 rm -rf "$SPOKEN_APP"
 mkdir -p "$SPOKEN_BUILD" "$SPOKEN_APP/Contents/MacOS" "$SPOKEN_APP/Contents/Resources"
@@ -15,11 +16,14 @@ SPOKEN_SOURCES=()
 while IFS= read -r source; do SPOKEN_SOURCES+=("$source"); done < <(find Spoken -type f -name '*.swift' ! -name '._*' | LC_ALL=C sort)
 xcrun clang -target "$SPOKEN_TARGET" -fobjc-arc -c Spoken/Services/ObjCExceptionCatcher.m -o "$SPOKEN_BUILD/ObjCExceptionCatcher.o"
 xcrun swiftc -target "$SPOKEN_TARGET" -swift-version 5 -O \
+  -F "$SPOKEN_SPARKLE" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -module-cache-path "$SPOKEN_BUILD/module-cache" \
   -import-objc-header Spoken/Spoken-Bridging-Header.h \
   "${SPOKEN_SOURCES[@]}" "$SPOKEN_BUILD/ObjCExceptionCatcher.o" \
   -o "$SPOKEN_APP/Contents/MacOS/Spoken"
 cp Spoken/Assets.xcassets/AppIcon.appiconset/icon.icns "$SPOKEN_APP/Contents/Resources/AppIcon.icns"
+mkdir -p "$SPOKEN_APP/Contents/Frameworks"
+ditto "$SPOKEN_SPARKLE/Sparkle.framework" "$SPOKEN_APP/Contents/Frameworks/Sparkle.framework"
 
 /usr/bin/python3 - <<'PY'
 import plistlib
@@ -30,7 +34,7 @@ version = re.search(r'MARKETING_VERSION = ([^;]+);', project).group(1)
 build = re.search(r'CURRENT_PROJECT_VERSION = ([^;]+);', project).group(1)
 info = plistlib.loads(Path('Spoken/Info.plist').read_bytes())
 info.update(CFBundleExecutable='Spoken', CFBundleIdentifier='com.moss.spoken', CFBundleName='Spoken',
-            CFBundleShortVersionString=version, CFBundleVersion=build + '.1',
+            CFBundleShortVersionString=version, CFBundleVersion=build,
             CFBundleIconFile='AppIcon.icns', LSMinimumSystemVersion='14.0',
             CFBundleGetInfoString='Spoken local development build')
 info.pop('CFBundleIconName', None)
@@ -40,5 +44,5 @@ PY
 find "$SPOKEN_APP" -name '._*' -delete 2>/dev/null || true
 codesign --force --sign - --timestamp=none --entitlements Spoken/Spoken.entitlements "$SPOKEN_APP"
 find "$SPOKEN_APP" -name '._*' -delete 2>/dev/null || true
-codesign --verify --strict "$SPOKEN_APP"
+codesign --verify --deep --strict "$SPOKEN_APP"
 printf 'Built local app: %s\n' "$SPOKEN_APP"

@@ -8,6 +8,7 @@ struct ContentView: View {
     @ObservedObject var connections: ModelConnectionStore
     @ObservedObject var hotkeys: HotKeyService
     @ObservedObject var accessibility: AccessibilityPermissionService
+    @ObservedObject private var updates = AppUpdateService.shared
     @AppStorage("translateLang") private var language = TranslateLanguage.original.rawValue
     @State private var error: String?
     @State private var suggestion = ""
@@ -35,6 +36,11 @@ struct ContentView: View {
                     if !compactHeight { Text("把想法说出来").font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer()
+                if updates.availableVersion != nil {
+                    Button { onOpenSettings(.updates) } label: {
+                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(SpokenTheme.accent)
+                    }.buttonStyle(.plain).help("发现新版本，查看更新").accessibilityLabel("发现新版本，查看更新")
+                }
                 if accessibility.needsAttention && hotkeys.warning != nil {
                     Button { onOpenSettings(.permissions) } label: {
                         Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
@@ -111,6 +117,8 @@ struct ContentView: View {
                     ForEach(TranslateLanguage.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
                 }.labelsHidden().frame(width: 125)
                 Spacer()
+                Button("检查更新", action: updates.checkForUpdates).buttonStyle(.plain)
+                    .disabled(!updates.canCheckForUpdates || activity.isBusy() || updates.isInstalling || updates.isWaitingForIdle)
                 Button("退出") { NSApplication.shared.terminate(nil) }.buttonStyle(.plain)
             }.font(.caption).controlSize(.small)
             if let message = error ?? modes.loadError ?? connections.loadError ?? speechConnections.loadError {
@@ -183,11 +191,11 @@ struct ContentView: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case speech, models, modes, context, shortcuts, permissions
+    case speech, models, modes, context, shortcuts, permissions, updates
     static let groups: [(title: String, sections: [SettingsSection])] = [
         ("识别与处理", [.speech, .models]),
         ("表达偏好", [.modes, .context]),
-        ("操作与授权", [.shortcuts, .permissions])
+        ("操作与授权", [.shortcuts, .permissions, .updates])
     ]
     var id: String { rawValue }
     var title: String {
@@ -198,6 +206,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .permissions: return "权限与授权"
         case .speech: return "语音识别"
         case .context: return "个人背景"
+        case .updates: return "软件更新"
         }
     }
     var icon: String {
@@ -208,6 +217,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .permissions: return "hand.raised"
         case .speech: return "waveform"
         case .context: return "person.crop.circle"
+        case .updates: return "arrow.down.circle"
         }
     }
     var detail: String {
@@ -218,6 +228,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .permissions: return "确认自动输入权限，完成授权后即可直接填入输入框。"
         case .speech: return "选择适合你的语音识别方式。"
         case .context: return "帮助模型理解你的术语和表达习惯。"
+        case .updates: return "获取新功能和修复，保留已有设置。"
         }
     }
 }
@@ -288,6 +299,7 @@ struct SettingsView: View {
                     case .permissions: AccessibilitySettingsView(service: accessibility, navigation: navigation)
                     case .speech: SpeechConfigSectionView(navigation: navigation, dependencies: speechDependencies).padding(24)
                     case .context: PersonalSettingsView(navigation: navigation, defaults: defaults).padding(24)
+                    case .updates: UpdateSettingsView(updates: .shared, navigation: navigation)
                     }
                 }.id(section)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
