@@ -72,8 +72,52 @@
   "local_app_build": "passed; Command Line Tools; ad-hoc app signature",
   "dmg_integrity": "passed",
   "production_feed_signed": true,
-  "website_deployed": false,
+  "website_deployed": true,
   "blocker": null,
   "xcode_archive": "not run; full Xcode and Developer ID unavailable",
-  "release_status": "Signed locally; publication verification pending"
+  "release_status": "Published and verified",
+  "publication": {
+    "commit": "48d7c52996543d66c96e64bda9fc0961d5a0af03",
+    "cloudflare_check": "success",
+    "domains": [
+      "https://spoken-web-v2.pages.dev",
+      "https://spoken.linding.asia"
+    ],
+    "feed_signature": "passed against downloaded production bytes",
+    "installer_signature": "passed against downloaded production bytes",
+    "production_artifacts": [
+      {
+        "path": "updates/release.json",
+        "sha256": "9681fbb045bf861ce9a496a3a12914e4990995db5230a184967c961c5b0d6346",
+        "bytes": 838
+      },
+      {
+        "path": "updates/appcast.xml",
+        "sha256": "eac9f1136baad2c5c6f2838deadfda9a2b71db8f013948207b4e272c19b3d91a",
+        "bytes": 1882
+      },
+      {
+        "path": "Spoken-2.4.0-arm64.dmg",
+        "sha256": "47309a84450ade21ab6e3629a82ac5f1bf9882733eecf47ba117528e9ebcf5e4",
+        "bytes": 3023122
+      },
+      {
+        "path": "Spoken-2.4.0-arm64.dmg.sha256",
+        "sha256": "896021fcc5e0c2c3f89e67c7a96db8c22ca2008f91ba31c5c404f82823c44b9c",
+        "bytes": 89
+      }
+    ],
+    "sparkle_feed_check": {
+      "passed": true,
+      "events": [
+        "CHECK",
+        "FOUND 240.1"
+      ],
+      "feed": "https://spoken-web-v2.pages.dev/updates/appcast.xml",
+      "production_public_key": "ELDybXRgkY0PPuZlWdSEtpgXl6WrSV7MYnyzQlY20yA=",
+      "download_or_install_started": false
+    },
+    "release_url": "https://github.com/mumufuyun/spoken-mac/releases/tag/v2.4.0",
+    "github_asset_digest_matches": true
+  }
 }
