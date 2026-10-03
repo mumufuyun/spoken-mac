@@ -720,11 +720,11 @@ class RecordingViewModel: ObservableObject {
     var targetApplication: NSRunningApplication?
     private var lastRecognizedText = ""
     private let stateManager = StateManager.shared
-    static let collapsedHeight: CGFloat = 196
+    static let collapsedHeight: CGFloat = 152
     @Published var showsModes = false {
         didSet { onPanelResize?(panelHeight) }
     }
-    var panelHeight: CGFloat { showsModes ? min(520, (NSScreen.main?.visibleFrame.height ?? 800) - 80) : Self.collapsedHeight }
+    var panelHeight: CGFloat { showsModes ? min(472, (NSScreen.main?.visibleFrame.height ?? 800) - 80) : Self.collapsedHeight }
     var onPanelResize: ((CGFloat) -> Void)?
     private(set) var frozenConfiguration: Result<AIProcessingSnapshot, Error>?
     private let snapshotProvider: () throws -> AIProcessingSnapshot
@@ -1025,6 +1025,10 @@ struct RecordingPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Spoken").font(.system(size: 14, weight: .semibold, design: .rounded))
+                WaveformView(isRecording: viewModel.isRecording && (viewModel.isCaptureReady || viewModel.isAudioBuffered),
+                             isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
+                             isProcessing: viewModel.isProcessing)
+                    .accessibilityHidden(true)
                 Spacer()
                 if accessibility.needsAttention {
                     Text("需手动粘贴").font(.caption).foregroundStyle(.orange)
@@ -1057,9 +1061,6 @@ struct RecordingPanelView: View {
                     })
                 }.frame(maxHeight: .infinity)
             }
-            WaveformView(isRecording: viewModel.isRecording && (viewModel.isCaptureReady || viewModel.isAudioBuffered),
-                         isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
-                         isProcessing: viewModel.isProcessing)
             Text(modeError ?? viewModel.statusText).font(.system(size: 13)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head).frame(maxWidth: .infinity, alignment: .trailing)
             Spacer(minLength: 0)
@@ -1088,10 +1089,10 @@ struct WaveformView: View {
     let isCloudRecognizing: Bool
     let isProcessing: Bool
 
-    @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 40)
+    @State private var barHeights: [CGFloat] = Array(repeating: 3, count: 10)
     @State private var timer: Timer?
 
-    private let barSpacing: CGFloat = 4
+    private let barSpacing: CGFloat = 2
 
     var body: some View {
         HStack(spacing: barSpacing) {
@@ -1099,12 +1100,11 @@ struct WaveformView: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(waveformColor)
                     .frame(maxWidth: .infinity)
-                    .frame(height: max(4, barHeights[index]))
+                    .frame(height: max(3, barHeights[index]))
                     .animation(.spring(response: 0.2, dampingFraction: 0.5), value: barHeights[index])
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 40)
+        .frame(width: 44, height: 16)
         .onAppear {
             if isRecording || isCloudRecognizing {
                 startAnimation()
@@ -1162,8 +1162,8 @@ struct WaveformView: View {
                 for i in 0..<barHeights.count {
                     let center = CGFloat(barHeights.count) / 2.0
                     let distance = abs(CGFloat(i) - center) / center
-                    let maxH = 40.0 * (1.0 - distance * 0.3)
-                    barHeights[i] = CGFloat.random(in: 6...maxH)
+                    let maxH = 14.0 * (1.0 - distance * 0.3)
+                    barHeights[i] = CGFloat.random(in: 3...maxH)
                 }
             }
         }
@@ -1172,6 +1172,6 @@ struct WaveformView: View {
     private func stopAnimation() {
         timer?.invalidate()
         timer = nil
-        barHeights = Array(repeating: 6, count: barHeights.count)
+        barHeights = Array(repeating: 3, count: barHeights.count)
     }
 }
