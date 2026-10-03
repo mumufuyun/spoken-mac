@@ -720,7 +720,7 @@ class RecordingViewModel: ObservableObject {
     var targetApplication: NSRunningApplication?
     private var lastRecognizedText = ""
     private let stateManager = StateManager.shared
-    static let collapsedHeight: CGFloat = 224
+    static let collapsedHeight: CGFloat = 196
     @Published var showsModes = false {
         didSet { onPanelResize?(panelHeight) }
     }
@@ -1007,8 +1007,7 @@ class RecordingViewModel: ObservableObject {
 // MARK: - Recording Panel View
 
 struct RecordingPanelView: View {
-    // Keep the widest selected preset (会议记录) readable in the two-column grid.
-    static let width: CGFloat = 256
+    static let width: CGFloat = 360
     @ObservedObject var viewModel: RecordingViewModel
     @ObservedObject var modes: ModeStore
     @ObservedObject var hotkeys: HotKeyService
@@ -1064,20 +1063,17 @@ struct RecordingPanelView: View {
             Text(modeError ?? viewModel.statusText).font(.system(size: 13)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head).frame(maxWidth: .infinity, alignment: .trailing)
             Spacer(minLength: 0)
-            VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    Button { viewModel.onRecover?() } label: {
-                        Label("找回上次输入", systemImage: "arrow.uturn.backward")
-                    }.controlSize(.small)
-                        .disabled(!viewModel.canRecoverInput)
-                        .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "取消本轮录音并找回上次输入" : "正在处理或已取消，请重新唤起录音后找回"))
-                    Spacer(minLength: 0)
-                    Button("取消") { viewModel.cancel() }.controlSize(.small)
-                        .disabled(viewModel.isCancelled)
-                }
+            HStack(spacing: 8) {
+                Button { viewModel.onRecover?() } label: {
+                    Label("找回上次输入", systemImage: "arrow.uturn.backward")
+                }.controlSize(.small)
+                    .disabled(!viewModel.canRecoverInput)
+                    .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "取消本轮录音并找回上次输入" : "正在处理或已取消，请重新唤起录音后找回"))
+                Spacer(minLength: 0)
                 Text(hotkeys.isRegistered ? "\(hotkeys.displayName) \(viewModel.isRecording ? "完成" : "取消") · Esc 取消" : "快捷键不可用 · Esc 取消")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
-                    .frame(maxWidth: .infinity)
+                Button("取消") { viewModel.cancel() }.controlSize(.small)
+                    .disabled(viewModel.isCancelled)
             }
         }.padding(14).frame(width: Self.width, height: viewModel.panelHeight)
             .background(SpokenTheme.background, in: RoundedRectangle(cornerRadius: 16))
@@ -1092,7 +1088,7 @@ struct WaveformView: View {
     let isCloudRecognizing: Bool
     let isProcessing: Bool
 
-    @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 24)
+    @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 40)
     @State private var timer: Timer?
 
     private let barSpacing: CGFloat = 4

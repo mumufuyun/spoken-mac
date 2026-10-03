@@ -3089,10 +3089,11 @@ private extension AIProcessingRegression {
             }),
             ("Recovery: floating entry stays available after audio and partial recognition", {
                 let vm = RecordingViewModel(stopCapture: {}, cancelCapture: {})
+                let collapsedHeight = vm.panelHeight
                 vm.isRecording = true
                 try check(!vm.canRecoverInput, "Empty history enabled")
                 vm.hasRecoverableInput = true
-                try check(vm.canRecoverInput && vm.panelHeight == 224, "Ready entry disabled or height changed")
+                try check(vm.canRecoverInput && vm.panelHeight == collapsedHeight, "Ready entry disabled or height changed")
                 vm.hasDetectedSpeech = true
                 try check(vm.canRecoverInput, "Audio or noise disabled recovery before transcript")
                 vm.hasDetectedSpeech = false; vm.partialText = "非空口述"
@@ -3102,7 +3103,7 @@ private extension AIProcessingRegression {
                 vm.isCaptureReady = false; vm.isAudioBuffered = true
                 try check(vm.canRecoverInput, "Buffered recording disabled recovery")
                 vm.partialText = ""; vm.isRecording = false; vm.isProcessing = true
-                try check(!vm.canRecoverInput && vm.panelHeight == 224, "Processing enabled recovery or changed height")
+                try check(!vm.canRecoverInput && vm.panelHeight == collapsedHeight, "Processing enabled recovery or changed height")
                 vm.isRecording = true; vm.isProcessing = false; vm.isCancelled = true
                 try check(!vm.canRecoverInput, "Canceled session enabled recovery")
             }),
