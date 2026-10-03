@@ -14,6 +14,22 @@ enum AppState: String, CaseIterable {
     case recovering
 }
 
+enum FloatingInputPanelLayout {
+    static func frame(for size: NSSize, in visibleFrame: NSRect) -> NSRect {
+        let bottomInset: CGFloat = 200
+        let edgeInset: CGFloat = 16
+        let origin = NSPoint(
+            x: max(visibleFrame.minX + edgeInset,
+                   min(visibleFrame.midX - size.width / 2,
+                       visibleFrame.maxX - size.width - edgeInset)),
+            y: max(visibleFrame.minY + edgeInset,
+                   min(visibleFrame.minY + bottomInset,
+                       visibleFrame.maxY - size.height - edgeInset))
+        )
+        return NSRect(origin: origin, size: size)
+    }
+}
+
 @MainActor
 class StateManager: ObservableObject {
     static let shared = StateManager()
@@ -346,9 +362,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel.targetApplication = frontmostAppBeforeHotKey
         let recordingView = RecordingPanelView(viewModel: viewModel)
         let hostingController = NSHostingController(rootView: recordingView)
+        let panelSize = NSSize(width: RecordingPanelView.width, height: RecordingViewModel.collapsedHeight)
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: RecordingViewModel.collapsedHeight),
+            contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -363,16 +380,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel.onPanelResize = { [weak panel] height in
             guard let panel else { return }
             var frame = panel.frame
-            frame.size.height = height
+            frame.size = NSSize(width: panelSize.width, height: height)
+            if let screen = panel.screen ?? NSScreen.main {
+                frame = FloatingInputPanelLayout.frame(for: frame.size, in: screen.visibleFrame)
+            }
             panel.setFrame(frame, display: true)
         }
 
+        // NSHostingController can temporarily reset the panel frame to zero before layout.
+        // Position using the view's intended size, not that transient window frame.
+        panel.setContentSize(panelSize)
         if let screen = NSScreen.main {
-            let visible = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(
-                x: visible.midX - panel.frame.width / 2,
-                y: visible.origin.y + 40
-            ))
+            panel.setFrame(FloatingInputPanelLayout.frame(for: panelSize, in: screen.visibleFrame), display: true)
         }
 
         viewModel.onCancel = { [weak self, weak panel] in
@@ -420,7 +439,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let recovery = InputRecoveryStore.shared
         guard recordingViewModel.canRecoverInput, recovery.entry != nil,
               !AppUpdateService.shared.isInstalling else { return }
-        let origin = recordingPanel?.frame.origin
+        let screen = recordingPanel?.screen ?? NSScreen.main
         let targetApp = recordingViewModel.targetApplication ?? frontmostAppBeforeHotKey
         let inputTarget = inputTargetBeforeHotKey
         // Cancel capture before showing recovery. This invalidates late ASR callbacks and
@@ -429,7 +448,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
         recovery.prepareForPresentation()
-        let panel = InputRecoveryPanel(contentRect: NSRect(origin: origin ?? .zero, size: InputRecoveryView.size),
+        let panel = InputRecoveryPanel(contentRect: NSRect(origin: .zero, size: InputRecoveryView.size),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -438,7 +457,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak self] in self?.closeRecoveryPanel() })
-        if origin == nil { panel.center() }
+        panel.setContentSize(InputRecoveryView.size)
+        if let screen {
+            panel.setFrame(FloatingInputPanelLayout.frame(for: InputRecoveryView.size, in: screen.visibleFrame), display: true)
+        } else {
+            panel.center()
+        }
         recoveryPanel = panel
         recovery.onProcessed = { [weak self, weak panel] text in
             guard let self, let panel, self.recoveryPanel === panel, panel.isVisible else { return }
@@ -983,6 +1007,7 @@ class RecordingViewModel: ObservableObject {
 // MARK: - Recording Panel View
 
 struct RecordingPanelView: View {
+    static let width: CGFloat = 420
     @ObservedObject var viewModel: RecordingViewModel
     @ObservedObject var modes: ModeStore
     @ObservedObject var hotkeys: HotKeyService
@@ -1050,7 +1075,7 @@ struct RecordingPanelView: View {
                 Button("取消") { viewModel.cancel() }.controlSize(.small)
                     .disabled(viewModel.isCancelled)
             }
-        }.padding(18).frame(width: 420, height: viewModel.panelHeight)
+        }.padding(18).frame(width: Self.width, height: viewModel.panelHeight)
             .background(SpokenTheme.background, in: RoundedRectangle(cornerRadius: 16))
             .tint(SpokenTheme.accent)
     }
