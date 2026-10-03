@@ -1410,9 +1410,9 @@ private extension AIProcessingRegression {
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        func render<V: View>(_ view: V, name: String, size: NSSize, dark: Bool) throws {
+        func render<V: View>(_ view: V, name: String, size: NSSize? = nil, dark: Bool) throws {
             let host = NSHostingView(rootView: view.environment(\.colorScheme, dark ? .dark : .light))
-            host.frame = NSRect(origin: .zero, size: size)
+            host.frame = NSRect(origin: .zero, size: size ?? host.fittingSize)
             let panel = NSPanel(contentRect: host.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             panel.contentView = host
@@ -1506,24 +1506,27 @@ private extension AIProcessingRegression {
             let recoveryFixture = try RecoveryFixture()
             let recovery = recoveryFixture.recovery!
             try recoveryFixture.config.modes.select(WritingScene.workMessage.storageID)
+            recovery.capture("哎，我们现在这个语音时长有最长六十秒的上限吗？")
+            recovery.prepareForPresentation()
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-short-\(theme)", dark: dark)
             recovery.capture("嗯那个评审改到周五下午三点吧，方案我明天发，预算这块先别定，还得等财务确认。")
             recovery.prepareForPresentation()
-            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-original-\(theme)", size: InputRecoveryView.size, dark: dark)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-original-\(theme)", dark: dark)
             recovery.selectMode(WritingScene.meetingNotes.storageID); recovery.reprocess()
-            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-running-\(theme)", size: InputRecoveryView.size, dark: dark)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-running-\(theme)", dark: dark)
             recoveryFixture.processor.requests.last!.finish(.success("评审：周五下午三点。\n方案：明天发送。\n预算：等待财务确认。"))
             spin(0.1, until: { !recovery.isProcessing })
             recovery.selectMode(WritingScene.formalDocument.storageID)
-            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-result-new-scene-\(theme)", size: InputRecoveryView.size, dark: dark)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-result-new-scene-\(theme)", dark: dark)
             var longMode = recoveryFixture.config.modes.draft()
             longMode.name = "一个特别长的自定义场景名称用于检查找回页布局"
             try recoveryFixture.config.modes.save(longMode, baseRules: recoveryFixture.config.modes.configuration.baseRules)
             recovery.selectMode(longMode.id)
-            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-long-scene-\(theme)", size: InputRecoveryView.size, dark: dark)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-long-scene-\(theme)", dark: dark)
             recovery.capture(String(repeating: "这是一段需要核对的较长原始口述。预算还要等财务确认。\n", count: 25), mayBeIncomplete: true)
             recovery.reprocess(); recoveryFixture.processor.requests.last!.finish(.failure(MiniMaxError.timeout))
             spin(0.1, until: { !recovery.isProcessing })
-            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-long-failure-\(theme)", size: InputRecoveryView.size, dark: dark)
+            try render(InputRecoveryView(recovery: recovery, onClose: {}), name: "recovery-long-failure-\(theme)", dark: dark)
             fixture.permissionState = .ready; fixture.accessibility.refresh()
         }
         try render(ContentView(onOpenSettings: { _ in }, modes: fixture.modes, connections: fixture.connections, speechConnections: fixture.speechConnections,
@@ -1658,14 +1661,18 @@ private struct InteractiveSmokeView: View {
         }
         recoveryStore = recovery
         recovery.prepareForPresentation()
-        let panel = InputRecoveryPanel(contentRect: NSRect(origin: .zero, size: InputRecoveryView.size),
+        let panel = InputRecoveryPanel(contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hidesOnDeactivate = false
         panel.level = .floating; panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak panel] in
+        let host = NSHostingView(rootView: InputRecoveryView(recovery: recovery, onSizeChange: { [weak panel] size in
+            panel?.setContentSize(size)
+        }) { [weak panel] in
             recovery.cancelProcessing(); recovery.onProcessed = nil
             panel?.orderOut(nil); panel?.contentView = nil; recoveryPanel = nil
         })
+        panel.contentView = host
+        panel.setContentSize(host.fittingSize)
         recovery.onProcessed = { [weak panel] text in
             guard let panel, recoveryPanel === panel, panel.isVisible else { return }
             recovery.onProcessed = nil

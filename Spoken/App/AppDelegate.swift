@@ -448,7 +448,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
         recovery.prepareForPresentation()
-        let panel = InputRecoveryPanel(contentRect: NSRect(origin: .zero, size: InputRecoveryView.size),
+        let panel = InputRecoveryPanel(contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -456,13 +456,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: InputRecoveryView(recovery: recovery) { [weak self] in self?.closeRecoveryPanel() })
-        panel.setContentSize(InputRecoveryView.size)
-        if let screen {
-            panel.setFrame(FloatingInputPanelLayout.frame(for: InputRecoveryView.size, in: screen.visibleFrame), display: true)
-        } else {
-            panel.center()
-        }
+        let host = NSHostingView(rootView: InputRecoveryView(recovery: recovery, onSizeChange: { [weak panel] size in
+            guard let panel else { return }
+            panel.fitContent(size, on: panel.screen ?? screen)
+        }) { [weak self] in self?.closeRecoveryPanel() })
+        panel.contentView = host
+        panel.fitContent(host.fittingSize, on: screen)
+        if screen == nil { panel.center() }
         recoveryPanel = panel
         recovery.onProcessed = { [weak self, weak panel] text in
             guard let self, let panel, self.recoveryPanel === panel, panel.isVisible else { return }
