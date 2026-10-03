@@ -82,4 +82,4 @@ Spoken 是 macOS 菜单栏语音输入工具：将语音按真实使用场景整
 - 个人背景保存在本机偏好设置中，可编辑、停用或清空；仅在需要 AI 后处理时发送给当前模型服务商。
 - 稳定性指标只记录会话、成功、失败、重连和降级计数，不记录音频或文本。
 - 仓库只保留 macOS 实现；七个场景、旧设置迁移和 ASR 核心逻辑需有测试。
-- 真实网络验证按 [ITERATION_2026_ASR_AND_SCENES.md](ITERATION_2026_ASR_AND_SCENES.md) 执行。
+- 真实网络验证按 [ITERATION_2026_ASR_AND_SCENES.md](docs/archive/engineering/ITERATION_2026_ASR_AND_SCENES.md) 执行。

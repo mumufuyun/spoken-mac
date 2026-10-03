@@ -20,3 +20,14 @@ __pycache__/
 
 # Local prompt experiments can contain private transcripts and model outputs.
 evaluations/prompt-tuning-*/
+
+# Independent website checkout, synchronized through its own Git remote.
+/spoken-web-v2/
+
+# Raw experiments stay local; commit reviewed fixtures and summaries explicitly.
+/evaluations/experiments/
+
+# Local service configuration.
+.env
+.env.*
+!.env.example

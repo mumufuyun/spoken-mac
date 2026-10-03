@@ -1,11 +1,13 @@
-# Spoken 评测体系
+# Spoken 评测资料
+
+以下保留仓库内 124 题历史基线及其评审流程。2.4.9 的冻结提示词、来源和评测限制见[场景提示词迭代](../docs/prompt-v8-integration.md)。本地 `experiments/` 和 `prompt-tuning-*/` 保留原始实验数据，不随 Git 同步；需要入库的结论应单独整理并检查。
 
 本目录固化 Spoken 提示词与模型改版的标准评测体系：**一套标准评测集 + 一套统一评估方式 + 定期迭代政策**。
 任何提示词或模型改版的效果结论，必须以本体系跑出的前后对照为准。
 
 ## 1. 标准评测集
 
-**当前版本：v1 = `evaluations/scene_targeted_samples_2026-09-30.json`（124 题）**
+**仓库内历史基线：v1 = `evaluations/scene_targeted_samples_2026-09-30.json`（124 题）**
 
 - 覆盖全部 7 个场景模式：`raw_transcript`（R1–R10）、`casual_chat`（C1–C19）、`work_message`（W1–W19）、`formal_document`（F1–F19）、`meeting_notes`（M1–M19）、`content_share`（P1–P19）、`ai_instruction`（A1–A19）。
 - 长度分布：短 28 / 中 75 / 长 21，短中句为主，模拟真实语音输入。
@@ -64,6 +66,6 @@ SPOKEN_EVAL_MODEL=qwen3.8-flash SPOKEN_EVAL_THINKING_MODE=off scripts/run_standa
 
 ## 4. 历史对照报告
 
-- `SPOKEN_AI_MODE_EVALUATION_2026-09-30.md`：124 题基线（v5 提示词），5 未通过 + 1 存疑
-- `SPOKEN_AI_MODE_REGRESSION_2026-10-01.md`：v5→v6 提示词前后对照与落地记录
-- `SPOKEN_AI_MODE_EVALUATION_2026-08-24.md`、`SPOKEN_AI_MODE_REGRESSION_2026-08-24.md`：早期六模式评测（已存档）
+- [SPOKEN_AI_MODE_EVALUATION_2026-09-30.md](../docs/archive/evaluations/SPOKEN_AI_MODE_EVALUATION_2026-09-30.md)：124 题基线（v5 提示词），5 未通过 + 1 存疑
+- [SPOKEN_AI_MODE_REGRESSION_2026-10-01.md](../docs/archive/evaluations/SPOKEN_AI_MODE_REGRESSION_2026-10-01.md)：v5→v6 提示词前后对照与落地记录
+- [SPOKEN_AI_MODE_EVALUATION_2026-08-24.md](../docs/archive/evaluations/SPOKEN_AI_MODE_EVALUATION_2026-08-24.md)、[SPOKEN_AI_MODE_REGRESSION_2026-08-24.md](../docs/archive/evaluations/SPOKEN_AI_MODE_REGRESSION_2026-08-24.md)：早期六模式评测（已存档）
