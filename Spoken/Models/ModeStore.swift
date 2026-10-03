@@ -42,7 +42,7 @@ extension ModeDefinition {
 }
 
 struct ModeConfiguration: Codable, Equatable {
-    static let currentVersion = 7
+    static let currentVersion = 8
     var version = ModeConfiguration.currentVersion
     var baseRules = PromptComposer.defaultBaseRules
     var modes = WritingScene.allCases.map(ModeDefinition.preset)
@@ -91,6 +91,7 @@ final class ModeStore: ObservableObject {
                     if migrated.version == 4 { migrated = Self.migratingV4(migrated) }
                     if migrated.version == 5 { migrated = Self.migratingV5(migrated) }
                     if migrated.version == 6 { migrated = Self.migratingV6(migrated) }
+                    if migrated.version == 7 { migrated = Self.migratingV7(migrated) }
                     try validate(migrated)
                     try file.save(migrated)
                     configuration = migrated
@@ -283,6 +284,19 @@ final class ModeStore: ObservableObject {
         }
         next.modes = next.modes.map { mode in
             guard let scene = mode.builtin, mode.sceneRules == LegacyPromptsV6.sceneRules(for: scene) else { return mode }
+            var refreshed = mode
+            refreshed.sceneRules = PromptComposer.defaultSceneRules(for: scene)
+            return refreshed
+        }
+        return next
+    }
+
+    /// v7→v8: update only untouched defaults; retain edited rules, custom modes and selection.
+    private static func migratingV7(_ saved: ModeConfiguration) -> ModeConfiguration {
+        var next = saved
+        next.version = 8
+        next.modes = next.modes.map { mode in
+            guard let scene = mode.builtin, mode.sceneRules == LegacyPromptsV7.sceneRules(for: scene) else { return mode }
             var refreshed = mode
             refreshed.sceneRules = PromptComposer.defaultSceneRules(for: scene)
             return refreshed

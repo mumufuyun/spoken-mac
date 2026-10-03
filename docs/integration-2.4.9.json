@@ -1,0 +1,53 @@
+{
+  "baseline_commit": "19a9e97de55aea2a3ac4fe6eae1be17f9513c0e6",
+  "base_release": "2.4.8 / 248.1",
+  "candidate_version": "2.4.9",
+  "candidate_build": "249.1",
+  "configuration_migration": "7 to 8; exact old-default matches only",
+  "offline_tests": {
+    "passed": 209,
+    "total": 209,
+    "external_model_requests": 0
+  },
+  "prompt_checks": {
+    "compiled_seven_defaults_match_frozen": true,
+    "mock_wire_requests_match_frozen": true,
+    "saved_defaults_keep_exact_request": true,
+    "production_context_protections_preserved": true,
+    "custom_base_rules_and_language_preserved": true
+  },
+  "frozen_evaluation_scope": "Seven whole scene prompts selected from separate 3-repeat evaluations; 599/630 A, 9 critical errors and 1 D remain. No new full combined evaluation.",
+  "changed_scenes": [
+    "casual_chat",
+    "formal_document",
+    "meeting_notes",
+    "content_share",
+    "ai_instruction"
+  ],
+  "unchanged_scene_tasks": [
+    "raw_transcript",
+    "work_message"
+  ],
+  "source_sha256": {
+    "Spoken/Models/ModeStore.swift": "382ffe582172d72227bc43c5a175e59091b0b964a543cfd7784750cf324f9cc8",
+    "Spoken/Services/PromptComposer.swift": "295ff953614e04c4d383d7c7dc4236ee52d3dd67b3f744b7b426e385695a9ee5",
+    "Spoken/Services/AIProcessingService.swift": "649917b8405bda939cecf65cc7ca0958d5deeeb61b98290d6ce7fee8d0a27ddc",
+    "Spoken.xcodeproj/project.pbxproj": "9c96a012576024420b9928f4fe0064d1462939a84d4d95110b4acfee0318d162",
+    "SpokenTests/Offline/AIProcessingRegression.swift": "41776dea3ea6de0456307e731841bcd36c8f300489ced9eee3c68983e57297ae"
+  },
+  "model_or_thinking_settings_changed": false,
+  "historical_evaluation_records_changed": false,
+  "live_application_installed": false,
+  "published": false,
+  "app_build": "passed; local ad-hoc signed, not notarized",
+  "package": {
+    "filename": "Spoken-2.4.9-arm64.dmg",
+    "sha256": "71b058df8ebabe34139979688e0c30af2c0bf5f8cfe4b25fc320f4f6985cb9d6",
+    "size": 4143846,
+    "disk_image_integrity": "passed",
+    "mounted_app_version": "2.4.9 / 249.1",
+    "mounted_binary_matches_build": true,
+    "codesign_deep_strict": "passed",
+    "signing": "local ad-hoc; not Developer ID or notarized"
+  }
+}

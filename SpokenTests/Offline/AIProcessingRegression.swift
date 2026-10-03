@@ -645,7 +645,10 @@ private extension AIProcessingRegression {
                     let rules = PromptComposer.defaultSceneRules(for: scene)
                     try check(!rules.contains("{text}"), "Placeholder leaked into new scene")
                     try check(!rules.contains(AIProcessingService.sceneSafetyRules), "Legacy base duplicated")
-                    try check(rules.contains("只整理原话"), "Built-in became an answering mode")
+                    let editingBoundary = scene == .contentShare
+                        ? "不替用户回答问题、执行工作、做分析或编出结果"
+                        : "只整理原话"
+                    try check(rules.contains(editingBoundary), "Built-in lost its editing boundary")
                 }
                 let mode = ModeDefinition(id: UUID().uuidString, name: "问答", sceneRules: "直接回答问题")
                 let result = PromptComposer.systemPrompt(mode: mode, baseRules: "共同规则", language: .japanese, personalContext: "称呼：不该注入的名字\n领域：测试")
@@ -904,7 +907,7 @@ private extension AIProcessingRegression {
                 try check(f.modes.loadError == nil && f.modes.configuration.version == ModeConfiguration.currentVersion, "Migration retry failed")
                 try check(f.modes.configuration.baseRules == PromptComposer.defaultBaseRules, "Untouched base not updated")
             }),
-            ("Evaluation prompt exports match compiled App composition and exact v6 migration defaults", {
+            ("Historical evaluation exports match exact v6 and v7 migration defaults", {
                 let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                     .appendingPathComponent("SpokenTests/Offline/Fixtures/prompt-v7")
                 func snapshot(_ name: String) throws -> [String: Any] {
@@ -918,9 +921,128 @@ private extension AIProcessingRegression {
                 for scene in WritingScene.allCases {
                     let old = "# 基础规则\n" + LegacyPromptsV6.baseRules + "\n\n# 当前场景：" + scene.rawValue + "\n" + LegacyPromptsV6.sceneRules(for: scene)
                     try check(oldTasks[scene.storageID] == old, "v6 scene snapshot drift: \(scene.rawValue)")
-                    let compiled = PromptComposer.systemPrompt(mode: .preset(scene), baseRules: PromptComposer.defaultBaseRules,
+                    let v7 = "# 基础规则\n" + (current["base_rules"] as! String) + "\n\n# 当前场景：" + scene.rawValue + "\n" + LegacyPromptsV7.sceneRules(for: scene)
+                    try check(v7 == newTasks[scene.storageID]!, "v7 migration snapshot drift: \(scene.rawValue)")
+                }
+            }),
+            ("v7 migration preserves edited rules, custom modes, names and selection", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 7
+                legacy.baseRules += "\n用户的基础规则"
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                        sceneRules: LegacyPromptsV7.sceneRules(for: scene), builtin: scene)
+                }
+                let edited = LegacyPromptsV7.sceneRules(for: .contentShare) + "\n保留我的特别规则"
+                legacy.modes[legacy.modes.firstIndex { $0.builtin == .contentShare }!].sceneRules = edited
+                let custom = ModeDefinition(id: UUID().uuidString, name: "我的问答", sceneRules: "回答问题")
+                legacy.modes.append(custom)
+                legacy.selectedID = custom.id
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 8, "v7 migration failed")
+                try check(f.modes.configuration.baseRules == legacy.baseRules, "Base rules overwritten")
+                try check(f.modes.selected == custom && f.modes.customModes == [custom], "Custom mode or selection lost")
+                try check(f.modes.modes.map(\.name) == legacy.modes.map(\.name), "Names changed")
+                for scene in WritingScene.allCases {
+                    let expected = scene == .contentShare ? edited : PromptComposer.defaultSceneRules(for: scene)
+                    try check(f.modes.modes.first { $0.builtin == scene }!.sceneRules == expected, "Wrong migrated scene: \(scene.rawValue)")
+                }
+                let once = f.modes.configuration
+                f.modes.reload()
+                try check(f.modes.configuration == once && (try f.file("modes").read(ModeConfiguration.self)) == once,
+                          "v7 migration did not persist or changed on reload")
+            }),
+            ("v7 migration refreshes all untouched defaults and changes only five scene rules", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 7
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                        sceneRules: LegacyPromptsV7.sceneRules(for: scene), builtin: scene)
+                }
+                legacy.selectedID = WritingScene.formalDocument.storageID
+                try f.file("modes").save(legacy)
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 8, "v7 default migration failed")
+                try check(f.modes.configuration.baseRules == legacy.baseRules
+                          && f.modes.configuration.selectedID == legacy.selectedID, "Base or selection changed")
+                var changed = 0
+                for scene in WritingScene.allCases {
+                    let actual = f.modes.modes.first { $0.builtin == scene }!.sceneRules
+                    try check(actual == PromptComposer.defaultSceneRules(for: scene), "Default not refreshed")
+                    if actual != LegacyPromptsV7.sceneRules(for: scene) { changed += 1 }
+                    if scene == .rawTranscript || scene == .workMessage {
+                        try check(actual == LegacyPromptsV7.sceneRules(for: scene), "Frozen unchanged mode drifted")
+                    }
+                }
+                try check(changed == 5, "Expected exactly five changed scene rules")
+            }),
+            ("Failed v7 migration preserves the file and retries without losing user edits", {
+                let f = ConfigurationFixture()
+                var legacy = ModeConfiguration()
+                legacy.version = 7
+                legacy.modes = WritingScene.allCases.map { scene in
+                    ModeDefinition(id: scene.storageID, name: scene.rawValue,
+                        sceneRules: LegacyPromptsV7.sceneRules(for: scene), builtin: scene)
+                }
+                legacy.modes[0].sceneRules += " " // Exact matching must not overwrite even this edit.
+                try f.file("modes").save(legacy)
+                f.failingFiles.insert("modes")
+                try check(f.modes.loadError != nil, "Migration write failure hidden")
+                try check(try f.file("modes").read(ModeConfiguration.self)! == legacy, "Original file changed on failure")
+                f.failingFiles = []
+                f.modes.reload()
+                try check(f.modes.loadError == nil && f.modes.configuration.version == 8, "v7 retry failed")
+                try check(f.modes.modes[0].sceneRules == legacy.modes[0].sceneRules, "User whitespace edit overwritten")
+            }),
+            ("All seven compiled defaults and saved defaults match the frozen evaluation prompts", {
+                let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                    .appendingPathComponent("SpokenTests/Offline/Fixtures/prompt-v8")
+                let snapshot = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("frozen-prompts.json"))) as! [String: Any]
+                let tasks = snapshot["tasks"] as! [String: String]
+                let contract = snapshot["output_contract"] as! String
+                let contextTemplate = try String(contentsOf: directory.appendingPathComponent("production-context-template.txt"), encoding: .utf8)
+                let f = ConfigurationFixture()
+                for scene in WritingScene.allCases {
+                    let expected = tasks[scene.storageID]! + "\n\n" + contract
+                    let mode = ModeDefinition.preset(scene)
+                    let compiled = PromptComposer.systemPrompt(mode: mode, baseRules: PromptComposer.defaultBaseRules,
                         language: .original, personalContext: nil)
-                    try check(compiled == newTasks[scene.storageID]! + "\n\n" + (current["output_contract"] as! String), "Evaluation differs from compiled App: \(scene.rawValue)")
+                    try check(compiled == expected, "Frozen evaluation prompt changed: \(scene.rawValue)")
+                    try f.modes.save(mode, baseRules: PromptComposer.defaultBaseRules)
+                    let saved = f.modes.modes.first { $0.builtin == scene }!
+                    try check(PromptComposer.systemPrompt(mode: saved, baseRules: f.modes.configuration.baseRules,
+                        language: .original, personalContext: nil) == expected, "Settings save changed default composition")
+                    let withContext = contextTemplate.replacingOccurrences(of: "\\(contextForPrompt)", with: "术语：测试词")
+                        .replacingOccurrences(of: "\\(taskPrompt)", with: tasks[scene.storageID]!) + "\n\n" + contract
+                    try check(PromptComposer.systemPrompt(mode: mode, baseRules: PromptComposer.defaultBaseRules,
+                        language: .original, personalContext: "术语：测试词") == withContext, "Production context protections lost")
+                    let customized = PromptComposer.systemPrompt(mode: mode, baseRules: "用户基础规则",
+                        language: .japanese, personalContext: nil)
+                    try check(customized.contains("用户基础规则") && customized.contains("最终输出语言必须是日文")
+                              && customized.hasSuffix(contract), "User rules, language or contract lost")
+                }
+            }),
+            ("All seven frozen default prompts reach the model request after snapshot capture", {
+                let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                    .appendingPathComponent("SpokenTests/Offline/Fixtures/prompt-v8/frozen-prompts.json")
+                let frozen = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+                let tasks = frozen["tasks"] as! [String: String]
+                let f = ConfigurationFixture()
+                _ = try f.connections.save(.preset(.qwen), key: "synthetic-key")
+                let transport = Fixture()
+                let service = transport.service()
+                for scene in WritingScene.allCases {
+                    try f.modes.select(scene.storageID)
+                    let snapshot = try AIProcessingSnapshot.capture(modes: f.modes, connections: f.connections, defaults: f.defaults)
+                    MockProtocol.reset([.init(json: answer("整理后的正文"))])
+                    var result: Result<String, Error>?
+                    service.process(text: input, snapshot: snapshot) { result = $0 }
+                    spin(4, until: { result != nil })
+                    try check(try result?.get() == "整理后的正文", "Mock request failed")
+                    let sent = (try body()["messages"] as! [[String: String]])[0]["content"]!
+                    try check(sent == tasks[scene.storageID]! + "\n\n" + (frozen["output_contract"] as! String),
+                              "Wire prompt differs from frozen evaluation: \(scene.rawValue)")
                 }
             }),
             ("Clean connection installation never reads legacy Keychain", {

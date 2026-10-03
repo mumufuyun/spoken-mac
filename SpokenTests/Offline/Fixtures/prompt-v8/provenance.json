@@ -1,0 +1,103 @@
+{
+  "source": "mode90 frozen scene selection 2026-10-03",
+  "base_release": "v2.4.8",
+  "prompt_sha256": "8d3d7bc2402074d4f7b136b106e716b17c5013a7475b09168ac516e205f88c51",
+  "baseline_scene_snapshot": "../prompt-v7/candidate-13-prompts.json",
+  "sources": {
+    "raw_transcript": {
+      "version": "P2",
+      "A_by_repeat": [
+        27,
+        28,
+        29
+      ],
+      "A": 84,
+      "planned": 90,
+      "critical_errors": 0,
+      "D": 0,
+      "task_sha256": "882e7d2f5bdf03736cebbf2309dc7e481679e2c0eb2acd826f3721eedf27f89a"
+    },
+    "work_message": {
+      "version": "P2",
+      "A_by_repeat": [
+        28,
+        29,
+        29
+      ],
+      "A": 86,
+      "planned": 90,
+      "critical_errors": 1,
+      "D": 0,
+      "task_sha256": "a66ce54f53dca22d7f4bd0df58ee14f2132a4540dab0cbdef0c49c8374169afe"
+    },
+    "meeting_notes": {
+      "version": "P2",
+      "A_by_repeat": [
+        30,
+        30,
+        28
+      ],
+      "A": 88,
+      "planned": 90,
+      "critical_errors": 1,
+      "D": 0,
+      "task_sha256": "f022027a41176825c46bc035ad2cf66baa70e47d1b5634932b1ca423813fb877"
+    },
+    "casual_chat": {
+      "version": "Q1",
+      "A_by_repeat": [
+        28,
+        29,
+        29
+      ],
+      "A": 86,
+      "planned": 90,
+      "critical_errors": 3,
+      "D": 0,
+      "task_sha256": "e2b265b7923768f81fb6ed5581cd9b7ae370205c42cffee427be37fab3c5bb4b"
+    },
+    "ai_instruction": {
+      "version": "Q4",
+      "A_by_repeat": [
+        28,
+        27,
+        28
+      ],
+      "A": 83,
+      "planned": 90,
+      "critical_errors": 3,
+      "D": 1,
+      "task_sha256": "b79ab0dae143b06802d88cfe1fbb1d2a8bfafded01c31e03e8ded0180f501a28"
+    },
+    "formal_document": {
+      "version": "Q7",
+      "A_by_repeat": [
+        30,
+        29,
+        28
+      ],
+      "A": 87,
+      "planned": 90,
+      "critical_errors": 1,
+      "D": 0,
+      "task_sha256": "769f2c288eb41f8fd5c6b46d9089e6ea43062c80ac0098f635efd988a61ecb39"
+    },
+    "content_share": {
+      "version": "Q9",
+      "A_by_repeat": [
+        29,
+        28,
+        28
+      ],
+      "A": 85,
+      "planned": 90,
+      "critical_errors": 0,
+      "D": 0,
+      "task_sha256": "f533e2325ad0d61334d7eec5b1b285fde296b71c9e8cdfa3229bc7ecaf5b2c24"
+    }
+  },
+  "evidence_scope": "Author-aware fixed 210-question dataset, 3 repeats per scene, Qwen3.8 Flash thinking off. Different frozen batches; not one new full run. Not independent acceptance.",
+  "known_remaining_critical_errors": 9,
+  "known_remaining_D": 1,
+  "integration_change": "Preserve v2.4.8 personal-context rules; F8 context wrapper differs from frozen evaluation. No new cloud scoring in this integration."
+}
