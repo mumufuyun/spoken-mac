@@ -7,6 +7,8 @@ struct ModelRequestAdapter {
     let outputLimit: Int
     let usesQwenTemperature: Bool
     let splitReasoning: Bool
+    let usesMeetingThinkingPolicy: Bool
+    static let longTextThreshold = 800
 
     init(connection: ModelConnection) {
         let host = URL(string: connection.baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() ?? ""
@@ -25,7 +27,8 @@ struct ModelRequestAdapter {
             thinking = .standard
         } else { thinking = .providerDefault }
         outputTokenField = minimaxHost && model == "minimax-m3" ? "max_completion_tokens" : "max_tokens"
-        outputLimit = 16_384
+        usesMeetingThinkingPolicy = qwenHost && model == "qwen3.8-flash"
+        outputLimit = usesMeetingThinkingPolicy ? 32_768 : 16_384
         usesQwenTemperature = qwenHost
         splitReasoning = minimaxHost
     }
@@ -34,6 +37,9 @@ struct ModelRequestAdapter {
         switch thinking { case .qwen, .standard, .minimaxM3: return true; default: return false }
     }
     var thinkingDescription: String {
+        if usesMeetingThinkingPolicy {
+            return "内置模式自动处理：会议记录达到800字符时开启思考，其他情况关闭。此开关仅用于自定义模式。"
+        }
         switch thinking {
         case .alwaysOn: return "此模型始终开启思考，无法关闭"
         case .providerDefault: return "使用供应商默认参数；未确认此模型的思考开关"
@@ -42,6 +48,10 @@ struct ModelRequestAdapter {
     }
     func usesThinking(_ requested: Bool) -> Bool {
         switch thinking { case .alwaysOn: return true; case .providerDefault: return false; default: return requested }
+    }
+    func requestedThinking(modeID: String, isCustom: Bool, inputLength: Int, preference: Bool) -> Bool {
+        guard usesMeetingThinkingPolicy, !isCustom else { return preference }
+        return modeID == WritingScene.meetingNotes.storageID && inputLength >= Self.longTextThreshold
     }
     func parameters(thinkingEnabled: Bool, outputTokens: Int) -> [String: Any] {
         var body: [String: Any] = [outputTokenField: min(outputLimit, outputTokens)]

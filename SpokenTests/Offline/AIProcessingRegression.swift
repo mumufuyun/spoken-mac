@@ -18,6 +18,7 @@ private final class MockProtocol: URLProtocol {
         var status = 200
         var delay: TimeInterval = 0
         var error: URLError?
+        var stream: String?
     }
     private static let lock = NSLock()
     private static var replies: [Reply] = []
@@ -66,9 +67,13 @@ private final class MockProtocol: URLProtocol {
                 return
             }
             let response = HTTPURLResponse(url: self.request.url!, statusCode: reply.status,
-                                           httpVersion: "HTTP/1.1", headerFields: nil)!
+                                           httpVersion: "HTTP/1.1", headerFields: ["Content-Type": reply.stream == nil ? "application/json" : "text/event-stream"])!
             self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            self.client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: reply.json))
+            let data = reply.stream.map { Data($0.utf8) } ?? (try! JSONSerialization.data(withJSONObject: reply.json))
+            // Split mid-byte as well as mid-event to exercise URLSession's response buffering.
+            for start in stride(from: 0, to: data.count, by: 7) {
+                self.client?.urlProtocol(self, didLoad: data.subdata(in: start..<min(start + 7, data.count)))
+            }
             self.client?.urlProtocolDidFinishLoading(self)
         }
         self.work = work
@@ -120,7 +125,7 @@ private final class Fixture {
         defaults.set(value, forKey: key)
     }
 
-    func service(timeout: TimeInterval = 2) -> MiniMaxService {
+    func service(timeout: TimeInterval? = 2) -> MiniMaxService {
         MiniMaxService(defaults: defaults, session: session, apiKeyProvider: { "offline-test-key" },
                        timeoutOverride: timeout, log: { [weak self] message in
             guard let self else { return }
@@ -283,12 +288,12 @@ private struct AIProcessingRegression {
                 try check(!f.messages.joined().contains(input), "Logs contain transcript")
                 try check(!f.messages.joined().contains("offline-test-key"), "Logs contain key")
             }),
-            ("Qwen explicit opt-in sends true", {
+            ("Qwen built-in policy overrides old connection opt-in", {
                 MockProtocol.reset([.init(json: answer("正文"))])
                 let f = Fixture()
                 f.set(MiniMaxService.qwenThinkingEnabledKey, true)
                 _ = try process(f.service())
-                try check(try body()["enable_thinking"] as? Bool == true, "Qwen opt-in lost")
+                try check(try body()["enable_thinking"] as? Bool == false, "Short built-in request inherited thinking")
             }),
             ("DeepSeek retains its existing setting", {
                 MockProtocol.reset([.init(json: answer("正文"))])
@@ -304,10 +309,17 @@ private struct AIProcessingRegression {
                 try check(!MiniMaxService.supportsThinkingToggle(model: "qwen3.8-flash", baseURL: "https://dashscope.aliyuncs.com.example.org/v1"), "Host substring accepted")
             }),
             ("Long text deadline grows and stays bounded", {
-                try check(MiniMaxService.aiTimeout(forInputLength: 100, thinkingEnabled: false) == 20, "Short timeout changed")
-                try check(MiniMaxService.aiTimeout(forInputLength: 2000, thinkingEnabled: false) == 35, "Long text still limited to 20s")
-                try check(MiniMaxService.aiTimeout(forInputLength: 20000, thinkingEnabled: false) == 60, "Unbounded timeout")
+                for length in [0, 100, 799, 800, 1599] {
+                    try check(MiniMaxService.aiTimeout(forInputLength: length, thinkingEnabled: false) == 60, "Regular non-thinking deadline too short")
+                }
+                for length in [1600, 2000, 6000, 20000] {
+                    try check(MiniMaxService.aiTimeout(forInputLength: length, thinkingEnabled: false) == 120, "Long non-thinking deadline wrong")
+                }
                 try check(MiniMaxService.aiTimeout(forInputLength: 100, thinkingEnabled: true) == 45, "Thinking budget mismatch")
+                try check(MiniMaxService.aiTimeout(forInputLength: 799, thinkingEnabled: true) == 45, "Short thinking deadline changed")
+                for length in [800, 1600, 6000] {
+                    try check(MiniMaxService.aiTimeout(forInputLength: length, thinkingEnabled: true) == 1800, "Long thinking still capped at 60s")
+                }
             }),
             ("Deadline reports failure exactly once; no silent success", {
                 MockProtocol.reset([.init(json: answer("迟到的正文"), delay: 0.3)])
@@ -424,7 +436,7 @@ private struct AIProcessingRegression {
                 vm.finishAIProcessing(.success("迟到正文"), originalText: input)
                 try check(outputs.count == count, "Cancelled ViewModel emitted text")
             })
-        ] + configurationTests() + personalContextTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests() + speechFinalizationTests()
+        ] + longTextTests() + configurationTests() + personalContextTests() + reviewTests() + outputGuardTests() + hotkeyTests() + accessibilityTests() + speechProviderTests() + recoveryTests() + speechFinalizationTests()
         var failures = 0
         for (name, test) in tests {
             do { try test(); print("PASS: \(name)") }
@@ -1110,6 +1122,139 @@ private extension AIProcessingRegression {
 }
 
 private extension AIProcessingRegression {
+    static func sseEvent(_ json: [String: Any]) -> String {
+        "data: " + String(data: try! JSONSerialization.data(withJSONObject: json), encoding: .utf8)! + "\n\n"
+    }
+
+    static func sseDelta(_ delta: [String: Any], finish: String? = nil) -> String {
+        sseEvent(["choices": [["index": 0, "delta": delta, "finish_reason": finish as Any? ?? NSNull()]]])
+    }
+
+    static func sseAnswer(_ text: String, finish: String = "stop") -> String {
+        sseDelta(["role": "assistant", "reasoning_content": "仅供测试的内部推理，不能成为用户正文。", "content": NSNull()])
+        + sseDelta(["content": text]) + sseDelta([:], finish: finish)
+        + sseEvent(["choices": [], "usage": ["completion_tokens": 100]]) + "data: [DONE]\n\n"
+    }
+
+    @MainActor
+    static func longTextTests() -> [(String, () throws -> Void)] {
+        [
+            ("Automatic thinking is limited to long built-in meetings", {
+                let adapter = ModelRequestAdapter(connection: .preset(.qwen))
+                for mode in WritingScene.allCases {
+                    for length in [799, 800, 1599, 6000] {
+                        for preference in [false, true] {
+                            let actual = adapter.requestedThinking(modeID: mode.storageID, isCustom: false, inputLength: length, preference: preference)
+                            try check(actual == (mode == .meetingNotes && length >= 800), "Unexpected automatic thinking mode or boundary")
+                        }
+                    }
+                }
+                for preference in [false, true] {
+                    try check(adapter.requestedThinking(modeID: "custom", isCustom: true, inputLength: 6000, preference: preference) == preference, "Custom mode preference lost")
+                }
+                let other = ModelRequestAdapter(connection: .preset(.deepseek))
+                try check(!other.usesMeetingThinkingPolicy, "Untested provider inherited Qwen policy")
+            }),
+            ("Long meeting uses evaluated stream budget and 30 minute deadline", {
+                MockProtocol.reset([.init(json: [:], stream: sseAnswer("明确结论：下周开始。"))])
+                let f = Fixture()
+                try check(try process(f.service(timeout: nil), text: String(repeating: "文", count: 800), mode: .meetingNotes).get() == "明确结论:下周开始。", "Stream did not produce final text")
+                let sent = try body()
+                try check(sent["enable_thinking"] as? Bool == true && sent["stream"] as? Bool == true, "Thinking transport not enabled")
+                try check(sent["max_tokens"] as? Int == 32768, "Evaluated output allowance lost")
+                try check(MockProtocol.requests[0].timeoutInterval == 1800, "Transport still limited to one minute")
+                try check(!f.messages.joined().contains("内部推理"), "Reasoning leaked to logs")
+            }),
+            ("Snapshot entry point selects policy from final transcript length", {
+                MockProtocol.reset([.init(json: [:], stream: sseAnswer("待办事项：周五评审。"))])
+                let f = Fixture()
+                let service = f.service(timeout: nil)
+                let snapshot = AIProcessingSnapshot(mode: .preset(.meetingNotes), language: .original, systemPrompt: "整理", connection: .preset(.qwen), apiKey: "synthetic-key")
+                var result: Result<String, Error>?
+                service.process(text: String(repeating: "文", count: 6000), snapshot: snapshot) { result = $0 }
+                spin(2, until: { result != nil })
+                try check(try result?.get() == "待办事项:周五评审。", "Snapshot path missed automatic policy")
+                try check(try body()["enable_thinking"] as? Bool == true, "Snapshot kept default off for long meeting")
+            }),
+            ("Other long modes keep non-thinking and get two minutes", {
+                for mode in [SpokenMode.formalDocument, .contentShare, .aiInstruction, .workMessage, .casualChat] {
+                    MockProtocol.reset([.init(json: answer("整理完成"))])
+                    let f = Fixture()
+                    f.set(MiniMaxService.qwenThinkingEnabledKey, true)
+                    _ = try process(f.service(timeout: nil), text: String(repeating: "文", count: 6000), mode: mode)
+                    let sent = try body()
+                    try check(sent["enable_thinking"] as? Bool == false && sent["stream"] as? Bool == false, "Other built-in mode enabled thinking")
+                    try check(MockProtocol.requests[0].timeoutInterval == 120, "Long non-thinking deadline wrong")
+                }
+            }),
+            ("Custom mode keeps explicit thinking preference", {
+                let f = Fixture()
+                let service = f.service(timeout: nil)
+                var connection = ModelConnection.preset(.qwen)
+                connection.thinkingEnabled = true
+                let snapshot = AIProcessingSnapshot(mode: ModeDefinition(id: UUID().uuidString, name: "自定义", sceneRules: "整理"), language: .original, systemPrompt: "整理", connection: connection, apiKey: "synthetic-key")
+                MockProtocol.reset([.init(json: answer("正文"))])
+                var result: Result<String, Error>?
+                service.process(text: "短文", snapshot: snapshot) { result = $0 }
+                spin(2, until: { result != nil })
+                try check(try result?.get() == "正文", "Custom request failed")
+                try check(try body()["enable_thinking"] as? Bool == true, "Custom explicit thinking disabled")
+                try check(MockProtocol.requests[0].timeoutInterval == 60, "Custom short deadline changed")
+            }),
+            ("SSE accepts CRLF comments Unicode and separate reasoning", {
+                let raw = (": heartbeat\n\n" + sseAnswer("会议🙂正文")).replacingOccurrences(of: "\n", with: "\r\n")
+                let payload = try AIOutputGuard.responseText(AIOutputGuard.streamedResponse(Data(raw.utf8)))
+                try check(payload.text == "会议🙂正文" && payload.discardedReasoning, "Reasoning mixed into Unicode content")
+            }),
+            ("Incomplete SSE cannot become a successful partial result", {
+                let prefix = sseDelta(["content": "半段正文"])
+                for raw in [prefix, prefix + "data: [DONE]\n\n", prefix + sseDelta([:], finish: "stop"), sseAnswer("半段正文", finish: "length")] {
+                    MockProtocol.reset([.init(json: [:], stream: raw)])
+                    let f = Fixture()
+                    try expectFailure(try process(f.service(), text: String(repeating: "文", count: 800), mode: .meetingNotes), code: "incomplete_output")
+                }
+            }),
+            ("SSE rejects tool calls unsafe roles and mirrored reasoning", {
+                for (delta, code) in [(["tool_calls": [["id": "call"]]] as [String: Any], "incomplete_output"), (["role": "tool", "content": "正文"], "unsafe_output"), (["channel": "analysis", "content": "分析"], "unsafe_output")] {
+                    let raw = sseDelta(delta, finish: "stop") + "data: [DONE]\n\n"
+                    try expectFailure(Result { try AIOutputGuard.streamedResponse(Data(raw.utf8)) }.map { _ in "" }, code: code)
+                }
+                let raw = sseAnswer("仅供测试的内部推理，不能成为用户正文。")
+                try expectFailure(Result { try AIOutputGuard.responseText(AIOutputGuard.streamedResponse(Data(raw.utf8))).text }, code: "unsafe_output")
+            }),
+            ("Malformed and error SSE fail without exposing partial text", {
+                for (raw, code) in [("data: invalid json\n\n", "parse_error"), (sseDelta(["content": "半段"]) + sseEvent(["error": ["message": "server failure"]]), "api_error")] {
+                    MockProtocol.reset([.init(json: [:], stream: raw)])
+                    let f = Fixture()
+                    try expectFailure(try process(f.service(), text: String(repeating: "文", count: 800), mode: .meetingNotes), code: code)
+                }
+            }),
+            ("Long streaming deadline and cancellation suppress late results", {
+                for cancel in [false, true] {
+                    MockProtocol.reset([.init(json: [:], delay: 0.25, stream: sseAnswer("迟到正文"))])
+                    let f = Fixture()
+                    let service = f.service(timeout: 0.08)
+                    var results: [Result<String, Error>] = []
+                    service.process(text: String(repeating: "文", count: 800), mode: .meetingNotes, translateLang: .original) { results.append($0) }
+                    if cancel { spin(0.02); service.cancelCurrentTask() }
+                    spin(0.35)
+                    if cancel { try check(results.isEmpty, "Cancelled stream completed") }
+                    else { try check(results.count == 1, "Streaming deadline delivered twice"); try expectFailure(results[0], code: "timeout") }
+                }
+            }),
+            ("Long streaming retries preserve transport and total deadline", {
+                MockProtocol.reset([.init(json: [:], error: URLError(.networkConnectionLost)), .init(json: [:], stream: sseAnswer("重试正文"))])
+                let f = Fixture()
+                try check(try process(f.service(), text: String(repeating: "文", count: 800), mode: .meetingNotes).get() == "重试正文", "Streaming retry failed")
+                try check(try body(1)["stream"] as? Bool == true, "Retry lost streaming mode")
+                MockProtocol.reset([.init(json: [:], error: URLError(.networkConnectionLost))])
+                try expectFailure(try process(f.service(timeout: 0.08), text: String(repeating: "文", count: 800), mode: .meetingNotes), code: "timeout")
+                spin(1.1)
+                try check(MockProtocol.requests.count == 1, "Stream retried after deadline")
+            })
+        ]
+    }
+
     @MainActor
     static func launchInteractiveSmoke() throws {
         let fixture = ConfigurationFixture([PersonalContextStore.contextKey: "领域：合成测试。表达习惯：简洁直接。"])

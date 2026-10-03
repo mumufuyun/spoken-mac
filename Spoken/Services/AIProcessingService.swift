@@ -151,17 +151,23 @@ final class AIProcessingService: @unchecked Sendable {
         guard let url = Self.chatEndpoint(for: connection.baseURL) else { completion(.failure(MiniMaxError.invalidURL)); return }
         guard !key.isEmpty else { completion(.failure(MiniMaxError.missingAPIKey)); return }
         let adapter = ModelRequestAdapter(connection: connection)
-        let usesThinking = adapter.usesThinking(connection.thinkingEnabled)
-        let aiTimeout = timeoutOverride ?? (isCustom ? 60 : Self.aiTimeout(forInputLength: text.count, thinkingEnabled: usesThinking))
-        let tokens = isCustom ? 8_192 : Self.maxOutputTokens(forInputLength: text.count, thinkingEnabled: usesThinking)
-        var body = adapter.parameters(thinkingEnabled: connection.thinkingEnabled, outputTokens: tokens)
+        let isLongText = text.count >= ModelRequestAdapter.longTextThreshold
+        let thinkingRequested = adapter.requestedThinking(modeID: modeID, isCustom: isCustom,
+                                                          inputLength: text.count, preference: connection.thinkingEnabled)
+        let usesThinking = adapter.usesThinking(thinkingRequested)
+        let aiTimeout = timeoutOverride ?? (isCustom && !isLongText ? 60 : Self.aiTimeout(forInputLength: text.count, thinkingEnabled: usesThinking))
+        // Long Qwen thinking uses the transport and output allowance exercised in the evaluation.
+        let streamsResponse = adapter.usesMeetingThinkingPolicy && isLongText && usesThinking
+        let tokens = streamsResponse ? 32_768 : (isCustom ? 8_192 : Self.maxOutputTokens(forInputLength: text.count, thinkingEnabled: usesThinking))
+        var body = adapter.parameters(thinkingEnabled: thinkingRequested, outputTokens: tokens)
         body["model"] = connection.model
         body["messages"] = messages
-        body["stream"] = false
+        body["stream"] = streamsResponse
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if streamsResponse { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
         request.setValue("Spoken/macOS", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = aiTimeout
         do { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
@@ -174,7 +180,7 @@ final class AIProcessingService: @unchecked Sendable {
             self.activeCompletion = completion
             self.requestStartedAt = ProcessInfo.processInfo.systemUptime
             let thinkingState = adapter.thinking == .providerDefault ? "provider_default" : String(usesThinking)
-            self.log("request=\(requestID.uuidString) mode=\(modeID) model=\(connection.model) input_chars=\(text.count) thinking=\(thinkingState) timeout_s=\(aiTimeout)")
+            self.log("request=\(requestID.uuidString) mode=\(modeID) model=\(connection.model) input_chars=\(text.count) thinking=\(thinkingState) stream=\(streamsResponse) timeout_s=\(aiTimeout)")
             let timeoutItem = DispatchWorkItem { [weak self] in
                 guard let self, self.activeRequestID == requestID else { return }
                 self.currentTask?.cancel()
@@ -183,7 +189,7 @@ final class AIProcessingService: @unchecked Sendable {
             self.timeoutWorkItem = timeoutItem
             self.requestQueue.asyncAfter(deadline: .now() + aiTimeout, execute: timeoutItem)
             let policy = AIOutputPolicy(stripWrappers: !isCustom, isInstruction: modeID == WritingScene.aiInstruction.storageID, originalText: text)
-            self.executeChat(request: frozenRequest, policy: policy, retryCount: 0, requestID: requestID) { result in
+            self.executeChat(request: frozenRequest, streamsResponse: streamsResponse, policy: policy, retryCount: 0, requestID: requestID) { result in
                 self.requestQueue.async { self.finishRequest(requestID, result: result) }
             }
         }
@@ -493,8 +499,10 @@ final class AIProcessingService: @unchecked Sendable {
     }
 
     static func aiTimeout(forInputLength length: Int, thinkingEnabled: Bool) -> TimeInterval {
-        // 短消息保持原有截止；长文本给完整正文更多生成时间，重试仍共享这一个截止。
-        guard thinkingEnabled else { return min(60, 20 + Double(max(0, length - 500)) / 100) }
+        // Shared across retries. Non-thinking evaluation peaked at 77s, all >60s inputs were >=1600 chars.
+        guard thinkingEnabled else { return length >= 1_600 ? 120 : 60 }
+        // Long thinking runs exceeded 20 minutes in evaluation.
+        if length >= ModelRequestAdapter.longTextThreshold { return 30 * 60 }
         return min(60, 45 + Double(max(0, length - 1_000)) / 500)
     }
 
@@ -526,7 +534,7 @@ final class AIProcessingService: @unchecked Sendable {
 
     // MARK: - 核心请求（OpenAI 兼容格式）
 
-    private func executeChat(request: URLRequest, policy: AIOutputPolicy, retryCount: Int, requestID: UUID,
+    private func executeChat(request: URLRequest, streamsResponse: Bool, policy: AIOutputPolicy, retryCount: Int, requestID: UUID,
                              completion: @escaping (Result<String, Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(requestQueue))
         guard activeRequestID == requestID else { return }
@@ -549,7 +557,7 @@ final class AIProcessingService: @unchecked Sendable {
                     print("Spoken: [DEBUG] Retrying... (attempt \(retryCount + 1))")
                     self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                         guard self.activeRequestID == requestID else { return }
-                        self.executeChat(request: request, policy: policy, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                        self.executeChat(request: request, streamsResponse: streamsResponse, policy: policy, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                     }
                     return
                 }
@@ -569,10 +577,17 @@ final class AIProcessingService: @unchecked Sendable {
             print("Spoken: [DEBUG] LLM response bytes: \(data.count)")
 
             do {
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    print("Spoken: [ERROR] JSON parse failed")
-                    completion(.failure(MiniMaxError.parseError))
-                    return
+                let json: [String: Any]
+                if streamsResponse {
+                    // Some servers return JSON errors even when a stream was requested.
+                    if let errorJSON = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], errorJSON["error"] != nil {
+                        json = errorJSON
+                    } else {
+                        json = try AIOutputGuard.streamedResponse(data)
+                    }
+                } else {
+                    guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw MiniMaxError.parseError }
+                    json = parsed
                 }
 
                 // 检查错误响应
@@ -583,7 +598,7 @@ final class AIProcessingService: @unchecked Sendable {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                             guard self.activeRequestID == requestID else { return }
-                            self.executeChat(request: request, policy: policy, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                            self.executeChat(request: request, streamsResponse: streamsResponse, policy: policy, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                         }
                         return
                     }
@@ -599,7 +614,7 @@ final class AIProcessingService: @unchecked Sendable {
                         print("Spoken: [DEBUG] Retrying API error... (attempt \(retryCount + 1))")
                         self.requestQueue.asyncAfter(deadline: .now() + 1.0) {
                             guard self.activeRequestID == requestID else { return }
-                            self.executeChat(request: request, policy: policy, retryCount: retryCount + 1, requestID: requestID, completion: completion)
+                            self.executeChat(request: request, streamsResponse: streamsResponse, policy: policy, retryCount: retryCount + 1, requestID: requestID, completion: completion)
                         }
                         return
                     }

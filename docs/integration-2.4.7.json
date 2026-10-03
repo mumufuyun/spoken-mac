@@ -1,0 +1,24 @@
+{
+  "version": "2.4.7",
+  "build": "247.2",
+  "integrated_recording_commit": "5f7e9b7",
+  "integrated_recovery_commit": "9f88358ffe870414ea17d9853198ba56d044e8fb",
+  "longtext_thread": "01a0fc87-80d8-72c3-b536-7d23396dcd1c",
+  "longtext_source_file_sha256": {
+    "Spoken/Services/AIProcessingService.swift": "2933adc4054a86013df8f510ad7dacfa1c4b2066dc4dba2e723c1a3e5ec935df",
+    "Spoken/Services/AIOutputGuard.swift": "6401a70b7804c11ed0ab49d097642e0684e5b7ceb6a1086beb72a60caa5e37df",
+    "Spoken/Services/ModelRequestAdapter.swift": "85d23e3d5149b2455b2a9c0a56d848305478c4d60276d96a4793e667bc4d20ab",
+    "Spoken/Views/ModelSettingsView.swift": "3ad79ac846ae0c0aaf2a4e413cb053cf864df84f234998dbc060a548974c9b41",
+    "SpokenTests/Offline/AIProcessingRegression.swift": "17633051625feaaf2c51b8aaec04ea8afb9016e3d89b07943a747f757c47a2f9"
+  },
+  "integration": "Apply only completed long-text changes from the older shared checkout; retain published prompt templates, recovery features and regression coverage.",
+  "prompt_templates_unchanged_from_2_4_6": true,
+  "offline_tests": "204/204 passed",
+  "saved_meeting_stream_replays": "15/15 passed; no external model requests",
+  "app_build": "passed",
+  "dmg_integrity": "passed",
+  "installer_sha256": "938572b547a88d524d4f3894e868b8e7a463c7334ffcad77a6d30c1164819ff9",
+  "signing": "local ad-hoc app; Sparkle Ed25519 installer and feed signatures",
+  "installed_app_untouched": true,
+  "installed_build_before_release": "247.1"
+}

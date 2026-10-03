@@ -174,7 +174,7 @@ struct ModelSettingsView: View {
                     let adapter = ModelRequestAdapter(connection: editor.draft)
                     VStack(alignment: .leading, spacing: 6) {
                         if adapter.supportsThinkingToggle {
-                            Toggle("开启思考", isOn: $editor.draft.thinkingEnabled).toggleStyle(.switch).controlSize(.small)
+                            Toggle(adapter.usesMeetingThinkingPolicy ? "自定义模式开启思考" : "开启思考", isOn: $editor.draft.thinkingEnabled).toggleStyle(.switch).controlSize(.small)
                         }
                         Text(adapter.thinkingDescription).font(.caption).foregroundStyle(.secondary)
                     }.padding(12).frame(maxWidth: .infinity, alignment: .leading)

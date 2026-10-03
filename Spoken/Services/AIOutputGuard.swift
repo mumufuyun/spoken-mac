@@ -24,6 +24,55 @@ enum AIOutputGuard {
         let discardedReasoning: Bool
     }
 
+    /// Assemble a completed Qwen SSE response before any text enters the paste pipeline.
+    /// URLSession buffers the transport; reasoning remains separate and is never delivered or logged.
+    static func streamedResponse(_ data: Data) throws -> [String: Any] {
+        guard let source = String(data: data, encoding: .utf8) else { throw MiniMaxError.parseError }
+        var eventLines: [String] = []
+        var content = "", reasoning = ""
+        var finishReason: String?
+        var done = false
+
+        func consumeEvent() throws {
+            guard !eventLines.isEmpty else { return }
+            let event = eventLines.joined(separator: "\n")
+            eventLines.removeAll(keepingCapacity: true)
+            guard !done else { throw MiniMaxError.parseError }
+            if event == "[DONE]" { done = true; return }
+            guard let json = try JSONSerialization.jsonObject(with: Data(event.utf8)) as? [String: Any] else { throw MiniMaxError.parseError }
+            if json["error"] != nil { throw MiniMaxError.apiError(code: 0, message: "流式请求失败") }
+            guard let choices = json["choices"] as? [[String: Any]] else { throw MiniMaxError.parseError }
+            if choices.isEmpty { return } // Usage-only event.
+            guard choices.count == 1, let choice = choices.first, choice["index"] as? Int == 0,
+                  let delta = choice["delta"] as? [String: Any] else { throw MiniMaxError.parseError }
+            guard finishReason == nil else { throw MiniMaxError.incompleteOutput }
+            try validateMessage(delta)
+            for field in ["content", "reasoning_content"] {
+                guard let raw = delta[field], !(raw is NSNull) else { continue }
+                guard let value = raw as? String else { throw MiniMaxError.parseError }
+                if field == "content" { content += value } else { reasoning += value }
+            }
+            if let raw = choice["finish_reason"], !(raw is NSNull) {
+                guard let value = raw as? String else { throw MiniMaxError.parseError }
+                finishReason = value
+            }
+        }
+
+        let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        for line in lines.components(separatedBy: "\n") {
+            if line.isEmpty { try consumeEvent() }
+            else if line.hasPrefix("data:") {
+                var value = String(line.dropFirst(5))
+                if value.hasPrefix(" ") { value.removeFirst() }
+                eventLines.append(value)
+            }
+        }
+        guard eventLines.isEmpty, done, let finishReason,
+              ["stop", "end_turn"].contains(finishReason) else { throw MiniMaxError.incompleteOutput }
+        return ["choices": [["finish_reason": finishReason,
+                              "message": ["role": "assistant", "content": content, "reasoning_content": reasoning]]]]
+    }
+
     static func responseText(_ json: [String: Any]) throws -> Payload {
         if let raw = json["choices"] {
             guard let choices = raw as? [[String: Any]], let first = choices.first else { throw MiniMaxError.parseError }
