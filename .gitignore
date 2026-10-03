@@ -11,6 +11,12 @@ xcuserdata/
 ._*
 .catpaw/
 .trae/
+# Signing credentials belong in Keychain, never source control.
+*.p12
+*.pfx
+*.private-key
+.signing.env
+__pycache__/
 
 # Local prompt experiments can contain private transcripts and model outputs.
 evaluations/prompt-tuning-*/

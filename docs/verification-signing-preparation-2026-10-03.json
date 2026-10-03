@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-03",
+  "status": "prepared_awaiting_developer_id_certificate",
+  "valid_codesigning_identities": 0,
+  "developer_membership": "not enrolled, confirmed by owner",
+  "targeted_tests": "6/6 passed, including actual code-requirement rejection",
+  "local_build": "passed; existing Swift deprecation warnings",
+  "release_gate_integration": "Published 2.4.5 DMG rejected as ad hoc before website mutation and release-key access",
+  "developer_id_signing": "not run: certificate unavailable",
+  "cross_version_privacy_and_keychain_verification": "pending real certificate and isolated test account",
+  "installed_application_modified": false,
+  "public_installer_replaced": false,
+  "public_installer_sha256": "1a84b557e1af6e6fb01b6a19c4306a55b4c31ab5162cc3c05efbc7305ee66f9a",
+  "notarization": "not implemented in this change"
+}

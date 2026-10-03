@@ -15,6 +15,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from sign_release_app import expected_team, verify_release_app
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE_URL = "https://spoken-web-v2.pages.dev"
@@ -39,6 +40,7 @@ def main():
     parser.add_argument("--installer", type=Path, required=True)
     parser.add_argument("--notes", type=Path, required=True)
     args = parser.parse_args()
+    team = expected_team()
     website, installer = args.website.resolve(), args.installer.resolve()
     if not (website / "src/lib/product.ts").is_file():
         parser.error("--website must be the Spoken website checkout")
@@ -56,6 +58,7 @@ def main():
         try:
             app = mount / "Spoken.app"
             run("codesign", "--verify", "--deep", "--strict", app)
+            verify_release_app(app, team)
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
             version, build = info["CFBundleShortVersionString"], info["CFBundleVersion"]
             release_number(version)
@@ -108,7 +111,8 @@ def main():
         run(sparkle / "bin/sign_update", "--account", ACCOUNT, "--verify", installer, signature)
         metadata = dict(version=version, build=build, title=notes["title"], notes=notes["notes"],
                         download="/" + filename, checksum="/" + filename + ".sha256",
-                        sha256=checksum, size=installer.stat().st_size, publicKey=public_key)
+                        sha256=checksum, size=installer.stat().st_size, publicKey=public_key,
+                        developerTeamID=team, appSigning="developer-id")
         # Only update the checkout after every artifact and signature has passed validation.
         updates.mkdir(parents=True, exist_ok=True)
         shutil.copy2(installer, target)
