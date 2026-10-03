@@ -1,0 +1,132 @@
+{
+  "version": "2.4.9",
+  "build": "249.2",
+  "verified_at_utc": "2026-10-03T15:08:25.908200+00:00",
+  "source_commit": "c09d227614242881040a50aee67d2088eab6e16f",
+  "integration_commit": "b9dcdf3c3520506321b94362aceee9def1cd58d0",
+  "integration_record": "integration-2.4.9.json",
+  "preflight_record": "release-preflight-2.4.9.json",
+  "source_integration_unchanged": true,
+  "offline_tests": "209/209 passed; no external model calls",
+  "app_build": "passed",
+  "dmg_integrity": "passed",
+  "mounted_binary_matches_build": true,
+  "app_codesign_verification": "strict deep verification passed; ad-hoc",
+  "installer_sha256": "abdc242eef0e72cadcfb6948810937fa47c861522a962a01f169e9f9b0035455",
+  "local_installation": {
+    "version": "2.4.8",
+    "build": "248.1",
+    "modified_by_this_release_task": false,
+    "upgrade_left_for_user_test": true
+  },
+  "website": {
+    "commit": "e3ffae4a220f19d95a319d31c2435d464ced9c29",
+    "cloudflare_check": "success",
+    "deployment_id": "24b31583-8dbb-4f57-89ac-e4a1985bbde7",
+    "tests": "14/14 passed",
+    "production_build": "passed",
+    "browser": "Production title, 2.4.9 / 249.2 download and checksum links, release copy and download anchor verified. Existing prominent permission guidance and panel previews preserved. Release disclosure expands correctly. No console warnings or errors.",
+    "new_updater_feature_ui_added": false,
+    "artifacts": [
+      {
+        "domain": "spoken-web-v2.pages.dev",
+        "path": "updates/release.json",
+        "sha256": "70939cd10d9acf75eb2382cd1bb5b96cf78ffb6f716c5aaee7cfd5218d495acf",
+        "size": 1082,
+        "matches": true
+      },
+      {
+        "domain": "spoken-web-v2.pages.dev",
+        "path": "updates/appcast.xml",
+        "sha256": "1393def8c4cbbec42f163f8846f7edeea8049cf0250ba6d0a6d67d0e248ca0a0",
+        "size": 5519,
+        "matches": true
+      },
+      {
+        "domain": "spoken-web-v2.pages.dev",
+        "path": "Spoken-2.4.9-arm64.dmg",
+        "sha256": "abdc242eef0e72cadcfb6948810937fa47c861522a962a01f169e9f9b0035455",
+        "size": 4143859,
+        "matches": true
+      },
+      {
+        "domain": "spoken-web-v2.pages.dev",
+        "path": "Spoken-2.4.9-arm64.dmg.sha256",
+        "sha256": "b658de4d7fdec7c1ed1bfc8093aea248968fddb9c9accd1bbeb1165758dca111",
+        "size": 89,
+        "matches": true
+      },
+      {
+        "domain": "spoken-web-v2.pages.dev",
+        "path": "安装与首次打开.txt",
+        "sha256": "2dbdddae9980b24e609f38e3fb430d66edf6c06666fe25e1d12ed908b1c41690",
+        "size": 3028,
+        "matches": true
+      },
+      {
+        "domain": "spoken.linding.asia",
+        "path": "updates/release.json",
+        "sha256": "70939cd10d9acf75eb2382cd1bb5b96cf78ffb6f716c5aaee7cfd5218d495acf",
+        "size": 1082,
+        "matches": true
+      },
+      {
+        "domain": "spoken.linding.asia",
+        "path": "updates/appcast.xml",
+        "sha256": "1393def8c4cbbec42f163f8846f7edeea8049cf0250ba6d0a6d67d0e248ca0a0",
+        "size": 5519,
+        "matches": true
+      },
+      {
+        "domain": "spoken.linding.asia",
+        "path": "Spoken-2.4.9-arm64.dmg",
+        "sha256": "abdc242eef0e72cadcfb6948810937fa47c861522a962a01f169e9f9b0035455",
+        "size": 4143859,
+        "matches": true
+      },
+      {
+        "domain": "spoken.linding.asia",
+        "path": "Spoken-2.4.9-arm64.dmg.sha256",
+        "sha256": "b658de4d7fdec7c1ed1bfc8093aea248968fddb9c9accd1bbeb1165758dca111",
+        "size": 89,
+        "matches": true
+      },
+      {
+        "domain": "spoken.linding.asia",
+        "path": "安装与首次打开.txt",
+        "sha256": "2dbdddae9980b24e609f38e3fb430d66edf6c06666fe25e1d12ed908b1c41690",
+        "size": 3028,
+        "matches": true
+      }
+    ],
+    "downloaded_signatures": "Feed and installer Ed25519 signatures passed on both production domains; tampered archive rejected."
+  },
+  "production_feed_discovery": {
+    "installed_version_simulated": "2.4.8",
+    "installed_build_simulated": "248.1",
+    "production_version": "2.4.9",
+    "production_build_found": "249.2",
+    "feed": "https://spoken-web-v2.pages.dev/updates/appcast.xml",
+    "require_signed_feed": true,
+    "events": [
+      "CHECK",
+      "FOUND 249.2"
+    ],
+    "download_or_install_performed": false,
+    "installed_app_untouched": true
+  },
+  "github_release": "https://github.com/mumufuyun/spoken-mac/releases/tag/v2.4.9",
+  "github_published_at": "2026-10-03T15:05:07Z",
+  "github_release_draft": false,
+  "github_release_prerelease": false,
+  "github_asset_digests_match": true,
+  "github_downloaded_bytes_match": true,
+  "source_pull_request": "https://github.com/mumufuyun/spoken-mac/pull/1",
+  "source_pull_request_state": "merged",
+  "limitations": [
+    "Prompt validation proves integration, exact request text and configuration migration; no new combined model-quality evaluation was run.",
+    "Ad-hoc app signing; no Apple notarization; no system trust or permission reset.",
+    "Production update discovery verified with the unchanged AppUpdateService and real Sparkle in an isolated app simulating 2.4.8 / 248.1. No actual update download, install or relaunch through the client.",
+    "No new live microphone, provider, cross-app paste or permission-continuity acceptance test."
+  ]
+}
