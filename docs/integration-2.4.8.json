@@ -1,0 +1,25 @@
+{
+  "source_thread": "01a10018-2df1-72f2-a900-a6e568655c91",
+  "source_files_sha256": {
+    "Spoken/Services/AccessibilityPermissionService.swift": "8cbe83f2d6876e3dd4b9a9fa109fd0400c3321901c9f973f0cac76d7339b1c67",
+    "Spoken/Views/AccessibilitySettingsView.swift": "5669ebb6f544bd709ba4e8c899362fa40eadcc9a3e51a5d1511b398e5a0cb196",
+    "docs/accessibility.md": "fe5f998e5dc7bd5005aac8c48ef349cb119be0d89352fa408a43dc087f2cd1a2",
+    "docs/安装与首次打开.txt": "2dbdddae9980b24e609f38e3fb430d66edf6c06666fe25e1d12ed908b1c41690"
+  },
+  "source_patch_sha256": "754dc0beb16eb0ba19beb62c8b1e915dbe101a007bcb182f55f1f4b1f76ced01",
+  "local_installation_before_release": {
+    "version": "2.4.7",
+    "build": "247.2"
+  },
+  "baseline": "b411db8",
+  "website_baseline": "4be22b8",
+  "version": "2.4.8",
+  "build": "248.1",
+  "offline_tests": "204/204 passed; no external model requests",
+  "app_build": "passed",
+  "dmg_integrity": "passed",
+  "installer_sha256": "48ee63c16216b3a4f150ff76e40ae2453b9a4001bf8f0cdb4313e1eab72764e3",
+  "signing": "Local ad-hoc application; Sparkle Ed25519 installer and feed signatures verified",
+  "preserved_2_4_7_features": true,
+  "local_app_modified": false
+}

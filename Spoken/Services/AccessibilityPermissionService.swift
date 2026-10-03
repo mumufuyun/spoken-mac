@@ -70,7 +70,7 @@ final class AccessibilityPermissionService: ObservableObject {
     func recheck() {
         feedback = refresh()
             ? "权限已生效。回到目标输入框即可继续使用。"
-            : "尚未检测到有效授权。请开启当前 Spoken 的开关，再点击重新检测。"
+            : "尚未检测到有效授权。若系统开关已开启，请按上方提示移除旧条目并重新添加当前应用；仍未生效时，退出并重新打开 Spoken。"
     }
 
     func markGuidePresented() { defaults.set(true, forKey: Self.guideKey) }

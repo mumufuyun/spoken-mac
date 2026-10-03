@@ -41,6 +41,16 @@ struct AccessibilityGuideView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("1. 打开系统设置 → 隐私与安全性 → 辅助功能。")
                     Text("2. 找到 Spoken 并打开开关；系统可能要求验证身份。")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("更新后，开关已开仍不生效？", systemImage: "exclamationmark.triangle.fill")
+                            .fontWeight(.semibold).foregroundStyle(.orange)
+                        Text("系统开关已开启，不代表新版 Spoken 的授权已生效。仅关闭再打开开关可能无效。")
+                        Text("选中旧 Spoken → 点击“−”移除 → 点击“+”添加“应用程序”里的新版 Spoken.app，并开启。")
+                            .fontWeight(.medium)
+                    }
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.orange.opacity(0.3), lineWidth: 1))
                     Text("3. 回到 Spoken，确认显示“辅助功能已授权”；也可点击“重新检测”。")
                 }.font(.callout).fixedSize(horizontal: false, vertical: true)
                 HStack {
@@ -51,11 +61,12 @@ struct AccessibilityGuideView: View {
                     Text(feedback).font(.callout).foregroundStyle(service.canAutoPaste ? Color.secondary : Color.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                DisclosureGroup("列表没有 Spoken，或已开启仍不生效？") {
+                Button("在 Finder 中显示当前应用") { service.revealApplication() }
+                    .font(.callout)
+                DisclosureGroup("列表没有 Spoken，或重新添加后仍不生效？") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("列表没有 Spoken：点击系统设置列表下方的“+”，选择当前运行的 Spoken.app，再打开开关。")
-                        Button("在 Finder 中显示当前应用") { service.revealApplication() }
-                        Text("更新或替换应用后，旧授权可能失效。先重新检测；仍未生效时，在辅助功能列表中移除旧的 Spoken，再用“+”添加当前应用。如果系统要求，退出并重新打开 Spoken。")
+                        Text("重新添加后仍未生效，或系统提示需要重启应用时，请退出并重新打开 Spoken，再检测权限。若应用装在其他位置，请通过上方 Finder 按钮定位并添加当前运行的应用。")
                         Text("已授权但某个输入框仍无法填入时，请确认光标位于可编辑区域。授权状态不代表每个应用都已成功接收文字。")
                     }.font(.callout).foregroundStyle(.secondary).padding(.top, 8)
                         .fixedSize(horizontal: false, vertical: true)
