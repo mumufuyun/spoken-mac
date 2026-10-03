@@ -6,6 +6,10 @@
 
 2026-10-03 已发布的 2.4.5（245.2）仍为临时本地签名。本机无可用应用签名证书，维护者尚未开通 Apple Developer Program。正式签名入口已准备；尚未产生 Developer ID 签名安装包，也未验证跨版本权限继承。
 
+同日按维护者要求尝试固定自签证书。在独立临时钥匙串生成证书与私钥后，系统报告证书不受信任；添加仅针对 `/usr/bin/codesign`、仅限代码签名用途的用户级信任后，签名工具仍返回 `no identity found`。未能完成基础签名，未进入跨版本权限继承验收。按“如果不行就先放弃”的要求停止，临时证书、私钥、钥匙串和信任设置已清理，未修改已安装应用及线上安装包。这是本机此次受限尝试的结果，不表示所有自签方案都不可行。
+
+现有本地测试版继续使用原发布方式，仍校验应用完整性及 Sparkle 的 Ed25519 安装包、订阅签名。正式 Developer ID 签名为可选入口；启用正式发布校验时添加 `--require-developer-id`。
+
 ## 配置证书
 
 1. 开通 Apple Developer Program 后，由账号持有人创建 **Developer ID Application** 证书。不是 Apple Development，也不是 Developer ID Installer。
@@ -26,7 +30,7 @@ bash scripts/package_dmg.sh --release
 
 入口在编译前检查证书类型、私钥可用性和所属团队，缺失或不匹配则停止。主应用和 Sparkle 的框架、辅助程序、XPC 服务由内到外签名，使用 Hardened Runtime 和安全时间戳；不通过关闭库验证来绕过身份检查。
 
-产物位于 `build/release/`。包内各组件必须通过 Apple Developer ID 证书链、固定团队、完整性和稳定身份检查。`prepare_website_release.py` 在生成更新订阅和修改网页文件前再次执行同样检查，拒绝临时签名包。
+产物位于 `build/release/`。包内各组件必须通过 Apple Developer ID 证书链、固定团队、完整性和稳定身份检查。`prepare_website_release.py --require-developer-id` 在生成更新订阅和修改网页文件前再次执行同样检查，拒绝临时签名包；不带此选项则保留本地测试版发布流程。
 
 签名不等于公证：这些命令不会提交 Apple 公证，不会自动安装、上传 GitHub 或部署网站。正式分发前仍应单独完成公证。已发布的下载 URL 和安装包不得覆盖；首次切换正式签名时使用新版本、新构建号。
 

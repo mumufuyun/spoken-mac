@@ -39,8 +39,10 @@ def main():
     parser.add_argument("--website", type=Path, required=True)
     parser.add_argument("--installer", type=Path, required=True)
     parser.add_argument("--notes", type=Path, required=True)
+    parser.add_argument("--require-developer-id", action="store_true",
+                        help="Require pinned Developer ID signatures for a formal distribution build")
     args = parser.parse_args()
-    team = expected_team()
+    team = expected_team() if args.require_developer_id else None
     website, installer = args.website.resolve(), args.installer.resolve()
     if not (website / "src/lib/product.ts").is_file():
         parser.error("--website must be the Spoken website checkout")
@@ -58,7 +60,8 @@ def main():
         try:
             app = mount / "Spoken.app"
             run("codesign", "--verify", "--deep", "--strict", app)
-            verify_release_app(app, team)
+            if args.require_developer_id:
+                verify_release_app(app, team)
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
             version, build = info["CFBundleShortVersionString"], info["CFBundleVersion"]
             release_number(version)
@@ -112,7 +115,9 @@ def main():
         metadata = dict(version=version, build=build, title=notes["title"], notes=notes["notes"],
                         download="/" + filename, checksum="/" + filename + ".sha256",
                         sha256=checksum, size=installer.stat().st_size, publicKey=public_key,
-                        developerTeamID=team, appSigning="developer-id")
+                        appSigning="developer-id" if args.require_developer_id else "local-test")
+        if team:
+            metadata["developerTeamID"] = team
         # Only update the checkout after every artifact and signature has passed validation.
         updates.mkdir(parents=True, exist_ok=True)
         shutil.copy2(installer, target)

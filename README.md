@@ -124,9 +124,9 @@ bash scripts/run_offline_ai_tests.sh --render-ui build/ui-preview
 bash scripts/build_local_app.sh
 ```
 
-产物位于 `build/Spoken.app`，仅做临时本地签名，不自动安装或启动；更新后可能需要重新授权。该产物不能进入新的网站发布流程。
+产物位于 `build/Spoken.app`，仅做临时本地签名，不自动安装或启动；更新后可能需要重新授权。现有测试版仍可通过网站发布脚本发布，并保留更新订阅与安装包的 Ed25519 校验。
 
-固定开发者身份的发布构建使用 `bash scripts/build_release_app.sh`，产物独立保存在 `build/release/`。运行前必须在钥匙串配置 Developer ID Application 证书及私钥，并指定 `SPOKEN_SIGNING_IDENTITY` 和 `SPOKEN_TEAM_ID`。缺少证书时直接停止，不回退到临时签名。配置、迁移和验证步骤见 [发布签名](docs/release-signing.md)。
+可选的正式签名构建使用 `bash scripts/build_release_app.sh`，产物独立保存在 `build/release/`。运行前必须在钥匙串配置 Developer ID Application 证书及私钥，并指定 `SPOKEN_SIGNING_IDENTITY` 和 `SPOKEN_TEAM_ID`。正式构建缺少证书时直接停止，不回退到临时签名；正式发布需为网站发布脚本添加 `--require-developer-id`。配置、迁移和验证步骤见 [发布签名](docs/release-signing.md)。
 
 首次运行需要授予：
 

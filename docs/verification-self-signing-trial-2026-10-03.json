@@ -1,0 +1,15 @@
+{
+  "passed": false,
+  "system_trust_changed": false,
+  "real_credentials_accessed": false,
+  "installed_app_changed": false,
+  "certificate_fingerprint": "A5A4AB493A2CD4FE0A4033755386CB9CC6634D43",
+  "temporary_user_trust": "codeSign policy, /usr/bin/codesign only",
+  "identity_diagnostics": "Policy: Code Signing\n  Matching identities\n  1) A5A4AB493A2CD4FE0A4033755386CB9CC6634D43 \"Spoken Local Code Signing Trial\" (CSSMERR_TP_NOT_TRUSTED)\n     1 identities found\n\n  Valid identities only\n     0 valid identities found",
+  "failure": "codesign: A5A4AB493A2CD4FE0A4033755386CB9CC6634D43: no identity found",
+  "temporary_trust_removed": true,
+  "outcome": "stopped_at_owner_request_after_bounded_attempt",
+  "permission_inheritance": "not reached: code signing identity rejected",
+  "temporary_directories_remaining": 0,
+  "trial_certificate_in_user_trust_settings": false
+}
