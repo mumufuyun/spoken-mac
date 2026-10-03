@@ -1007,7 +1007,8 @@ class RecordingViewModel: ObservableObject {
 // MARK: - Recording Panel View
 
 struct RecordingPanelView: View {
-    static let width: CGFloat = 420
+    // Keep the widest selected preset (会议记录) readable in the two-column grid.
+    static let width: CGFloat = 256
     @ObservedObject var viewModel: RecordingViewModel
     @ObservedObject var modes: ModeStore
     @ObservedObject var hotkeys: HotKeyService
@@ -1022,7 +1023,7 @@ struct RecordingPanelView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Spoken").font(.system(size: 14, weight: .semibold, design: .rounded))
                 Spacer()
@@ -1051,7 +1052,7 @@ struct RecordingPanelView: View {
                 .help(viewModel.isRecording ? "录音中可以切换，停止时锁定" : "本次模式已锁定")
             if viewModel.showsModes && viewModel.isRecording {
                 ScrollView {
-                    ModeGrid(modes: modes.modes, selectedID: modes.selected.id, onSelect: { id in
+                    ModeGrid(modes: modes.modes, selectedID: modes.selected.id, layout: .compact, columnCount: 2, onSelect: { id in
                         do { try modes.select(id); viewModel.showsModes = false; modeError = nil }
                         catch { modeError = error.localizedDescription }
                     })
@@ -1059,23 +1060,26 @@ struct RecordingPanelView: View {
             }
             WaveformView(isRecording: viewModel.isRecording && (viewModel.isCaptureReady || viewModel.isAudioBuffered),
                          isCloudRecognizing: viewModel.isCloudRecognizing && viewModel.isCaptureReady,
-                         isProcessing: viewModel.isProcessing).frame(height: 40)
+                         isProcessing: viewModel.isProcessing)
             Text(modeError ?? viewModel.statusText).font(.system(size: 13)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head).frame(maxWidth: .infinity, alignment: .trailing)
             Spacer(minLength: 0)
-            HStack(spacing: 8) {
-                Button { viewModel.onRecover?() } label: {
-                    Label("找回上次输入", systemImage: "arrow.uturn.backward")
-                }.controlSize(.small)
-                    .disabled(!viewModel.canRecoverInput)
-                    .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "取消本轮录音并找回上次输入" : "正在处理或已取消，请重新唤起录音后找回"))
-                Spacer(minLength: 0)
-                Text(hotkeys.isRegistered ? "\(hotkeys.displayName)\(viewModel.isRecording ? "完成" : "取消") · Esc 取消" : "快捷键不可用 · Esc 取消")
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Button { viewModel.onRecover?() } label: {
+                        Label("找回上次输入", systemImage: "arrow.uturn.backward")
+                    }.controlSize(.small)
+                        .disabled(!viewModel.canRecoverInput)
+                        .help(!viewModel.hasRecoverableInput ? "暂无可找回的上次输入" : (viewModel.canRecoverInput ? "取消本轮录音并找回上次输入" : "正在处理或已取消，请重新唤起录音后找回"))
+                    Spacer(minLength: 0)
+                    Button("取消") { viewModel.cancel() }.controlSize(.small)
+                        .disabled(viewModel.isCancelled)
+                }
+                Text(hotkeys.isRegistered ? "\(hotkeys.displayName) \(viewModel.isRecording ? "完成" : "取消") · Esc 取消" : "快捷键不可用 · Esc 取消")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
-                Button("取消") { viewModel.cancel() }.controlSize(.small)
-                    .disabled(viewModel.isCancelled)
+                    .frame(maxWidth: .infinity)
             }
-        }.padding(18).frame(width: Self.width, height: viewModel.panelHeight)
+        }.padding(14).frame(width: Self.width, height: viewModel.panelHeight)
             .background(SpokenTheme.background, in: RoundedRectangle(cornerRadius: 16))
             .tint(SpokenTheme.accent)
     }
@@ -1091,7 +1095,6 @@ struct WaveformView: View {
     @State private var barHeights: [CGFloat] = Array(repeating: 6, count: 24)
     @State private var timer: Timer?
 
-    private let barWidth: CGFloat = 4
     private let barSpacing: CGFloat = 4
 
     var body: some View {
@@ -1099,11 +1102,13 @@ struct WaveformView: View {
             ForEach(0..<barHeights.count, id: \.self) { index in
                 RoundedRectangle(cornerRadius: 2)
                     .fill(waveformColor)
-                    .frame(width: barWidth, height: max(4, barHeights[index]))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: max(4, barHeights[index]))
                     .animation(.spring(response: 0.2, dampingFraction: 0.5), value: barHeights[index])
             }
         }
-        .frame(height: 48)
+        .frame(maxWidth: .infinity)
+        .frame(height: 40)
         .onAppear {
             if isRecording || isCloudRecognizing {
                 startAnimation()

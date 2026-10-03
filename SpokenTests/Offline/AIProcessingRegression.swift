@@ -1491,15 +1491,18 @@ private extension AIProcessingRegression {
             vm.isRecording = true; vm.isCaptureReady = true; vm.showsModes = true
             vm.statusText = "这是一段合成语音，用于界面检查。"
             try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-\(theme)",
-                       size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+                       size: NSSize(width: RecordingPanelView.width, height: vm.panelHeight), dark: dark)
             vm.showsModes = false; vm.hasRecoverableInput = true
             try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-recovery-ready-\(theme)",
-                       size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+                       size: NSSize(width: RecordingPanelView.width, height: vm.panelHeight), dark: dark)
             vm.hasDetectedSpeech = true
             vm.partialText = "环境声触发的临时识别"
             vm.statusText = vm.partialText
             try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-recovery-speaking-\(theme)",
-                       size: NSSize(width: 420, height: vm.panelHeight), dark: dark)
+                       size: NSSize(width: RecordingPanelView.width, height: vm.panelHeight), dark: dark)
+            vm.isRecording = false; vm.isProcessing = true; vm.statusText = "正在整理文字…"
+            try render(RecordingPanelView(viewModel: vm, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility), name: "recording-processing-\(theme)",
+                       size: NSSize(width: RecordingPanelView.width, height: vm.panelHeight), dark: dark)
             let recoveryFixture = try RecoveryFixture()
             let recovery = recoveryFixture.recovery!
             try recoveryFixture.config.modes.select(WritingScene.workMessage.storageID)
@@ -1616,7 +1619,7 @@ private struct InteractiveSmokeView: View {
                 VStack(spacing: 16) {
                     Text("录音浮窗组件 · 嵌入测试窗口，不验证跨应用焦点")
                         .font(.caption).foregroundStyle(.secondary)
-                    RecordingPanelView(viewModel: recordingModel, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility).frame(width: 420)
+                    RecordingPanelView(viewModel: recordingModel, modes: fixture.modes, hotkeys: fixture.hotkeys, accessibility: fixture.accessibility).frame(width: RecordingPanelView.width)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if showMenu {
                 ContentView(onOpenSettings: { section in settingsSection = section; showMenu = false },

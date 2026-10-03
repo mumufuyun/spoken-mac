@@ -22,9 +22,10 @@ struct ModeGrid: View {
     let selectedID: String
     var disabled = false
     var layout: Layout = .standard
+    var columnCount = 3
     var onSelect: (String) -> Void
     var onManage: (() -> Void)?
-    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: layout == .standard ? 8 : 6), count: 3) }
+    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: layout == .standard ? 8 : 6), count: columnCount) }
 
     var body: some View {
         if layout == .dense {
