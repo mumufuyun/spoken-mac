@@ -1,0 +1,29 @@
+{
+  "version": "2.4.9",
+  "build": "249.2",
+  "sha256": "abdc242eef0e72cadcfb6948810937fa47c861522a962a01f169e9f9b0035455",
+  "size": 4143859,
+  "mounted_binary_matches_build": true,
+  "mounted_codesign": "passed",
+  "installed_app_untouched": true,
+  "verified_at_utc": "2026-10-03T15:04:30.654746+00:00",
+  "source_integration_commit": "b9dcdf3c3520506321b94362aceee9def1cd58d0",
+  "baseline": "2.4.8 / 248.1",
+  "candidate_build": "249.1",
+  "source_integration_unchanged": true,
+  "offline_regression": "209/209 passed; no external model calls",
+  "prompt_checks": {
+    "compiled_seven_defaults_match_frozen": true,
+    "mock_wire_requests_match_frozen": true,
+    "saved_defaults_keep_exact_request": true,
+    "production_context_protections_preserved": true,
+    "custom_base_rules_and_language_preserved": true
+  },
+  "website_tests": "14/14 passed",
+  "website_production_build": "passed with Node 22.16.0 and Next 16.2.4",
+  "sparkle_signatures": "installer and feed verified",
+  "app_signing": "local ad-hoc; not notarized",
+  "installed_version_preserved": "2.4.8 / 248.1",
+  "published": false,
+  "publication_verification": "See verification-updates-2.4.9.json after publication"
+}
